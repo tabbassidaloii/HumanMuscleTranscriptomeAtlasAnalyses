@@ -1,11 +1,12 @@
 ---
-  title: "Capillary density"
+  title: "Capillary density analysis in R"
 output: html_notebook
 editor_options: 
   chunk_output_type: console
 ---
 
-The muscle abbreviations were GRA (for Gracilis), SED (semitendinosus distal),  SEM (semitendinosus middle)), GAL (gastrocnemius lateralis), REF (rectus femoris), VAM (vastus medialis) and VAL (vastus lateralis\) in all the analyses and they only changed to GR, STM, STD, GL, RF, VM and VL for the publications.
+'Note:' The muscle abbreviations were GRA (for Gracilis), SED (semitendinosus distal),  SEM (semitendinosus middle)), GAL (gastrocnemius lateralis), REF (rectus femoris), VAM (vastus medialis) and VAL (vastus lateralis\) in all the analyses (scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots.
+
 ```{r setup, include = FALSE}
 rm (list = ls ())
 suppressPackageStartupMessages ({ 
@@ -29,7 +30,7 @@ set.seed (1)
 
 setwd("F://Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/MuscleDAtaset/HumanMuscleTranscriptomeAtlasAnalyses/")
 # Read all the txt files:
-InputPath = "imageQuantification/input/capillaryDensity/Myofiber/"
+InputPath = "imageQuantification/input/capillaryDensity/myofibers/"
 Files <- list.files (path = InputPath, pattern = ".txt", full.names = T)
 DataTable <- lapply (Files, read.table)
 # Fixing a typo in image name file:
@@ -44,7 +45,7 @@ STM and GL sections of 20 individuals were stained with CD31 and ENG.
 All the steps including segmentation were done automatically, but we do not need to do any filtration as we will consider the total area.
 
 # Calculating the area
-```{r Step2, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE, fig.height = 12, fig.width = 14}
+```{r area, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE, fig.height = 12, fig.width = 14}
 FiberData <- rbindlist (DataTable, idcol = TRUE) %>% 
   select (.id, Label, Mean, Ch, Area) %>%
   unique () %>%
@@ -70,7 +71,7 @@ FinalSamples <- No_Area_Fibers %>%
 ```
 
 # Improting quantification for capillaries
-```{r EndoCells, include = FALSE}
+```{r CDD31ENG, include = FALSE}
 rm (list = setdiff (ls (), c ("DataTable", "col.muscle", "FiberData", "NoFibers", "No_Area_Fibers", "FinalSamples")))
 
 # Read all the txt files:
