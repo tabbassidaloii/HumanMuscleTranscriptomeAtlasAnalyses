@@ -1,0 +1,988 @@
+---
+title: "Human muscle transcriptomics (file 9)"
+subtitle: 'Consensus WGCNA'
+output:
+  html_notebook: 
+    toc: yes
+    code_folding: hide
+  word_document: default
+editor_options:
+  chunk_output_type: console
+  always_allow_html: true
+---
+
+```{r setup5, include = FALSE}
+rm (list = ls ())
+suppressPackageStartupMessages ({ 
+  library (data.table)
+  library (limma)
+  library (edgeR)
+  library (dplyr)
+  library (WGCNA)
+  library (biomaRt)
+  library (flashClust)  
+  library (ggplot2)
+  library (scales) 
+  library (dplyr)
+  library (plotly)
+  library (knitr)
+  library (scales)
+  library (cowplot)
+  library (tidyr)
+  library (grid)
+  library (ggpubr)
+  library (ggrepel)
+  })
+opts_chunk$set (eval = TRUE, echo = TRUE, tidy = TRUE, highlight = TRUE, dev = c ('png'), fig.width = 10, fig.height = 8,  fig.path = "figures/")
+
+BiocStyle::markdown ()
+options (scipen = 999)
+
+# Loading the data
+Data <- new.env(); load ("Outputs/BatchMusCorrectedAllData.RData", envir = Data )
+D_BatchMus <- Data$D_BatchMus
+v_BatchMus <- Data$v_BatchMus
+```
+
+## C. Gene coexpression network analysis
+
+### Consensus WGCNA
+##### Candidate setting based on overlap with knowledge network
+##### Power = 8;  MinModuleSize = 20; deepSplit = 0; CutHeight = 0.2
+we decided to make the consensus network on TOM level because (1) the adjacency is calculated only based on 5 to 7 data points (2) the TOM includes the topological overlaps of genes which add more information to calculate the consensus matrices
+
+1. Creating adjacency matrices for each individual
+2. Calculating TOM 
+3. Scaling the TOM
+4. Consensus Network (quantile 0.1, 0.25, 0.3, 0.5, 0.6, 0.75, and 0.8)
+5. Calculating dissTOM
+6. Detecting modules
+7. Merging modules
+8. Defining co-expressed pairs (CPs)
+9. Finding the overlap between KPs and CPs
+10. Creating summary file showing the overlap of each network with knowledge network
+
+```{r AllStepsWGCNA, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE}
+enableWGCNAThreads ()
+# Candidate setting based on overlap with knowledge network
+# Power = 8;  MinModuleSize = 20; deepSplit = 0; CutHeight = 0.2
+
+# Steps 1 to 5 (on shark)
+SHARK = FALSE # The files are generated 
+if (! file.exists ("Outputs/ConsensusWGCNA/MergeModules/All_genes_modules_Consensus0.1.csv")) {
+  if (SHARK) {
+    # 1. Adjacency matrix for each individual
+    nSets <- nlevels (v_BatchMus$targets$individual)
+    nGenes <- nrow (v_BatchMus$E)
+    # Initialize an appropriate array to hold the expression set for each individual
+    SampleSets <- lapply (split (v_BatchMus$targets, v_BatchMus$targets$individual),
+                          function (x) rownames (x))
+    multiExpr <- lapply (setNames (names (SampleSets), names (SampleSets)),
+                         function (x) v_BatchMus$E[, grep (x, colnames (v_BatchMus$E))])
+    # Create correlation matrix
+    # Initialize an appropriate array to hold the adjacencies
+    Adjacencies <- array (0, dim = c (nSets, nGenes, nGenes));
+    # Calculate adjacencies in each individual data set
+    for (set in 1:nSets) {
+      Adjacencies[set, , ] <- adjacency (t (multiExpr[[set]]), power = 8, 
+                                         type = "signed hybrid", corFnc = "bicor", 
+                                         corOptions = c ("maxPOutliers = 0.1"))}
+    # 2. TOM
+    # Define a similarity based on the topological overlap
+    # Initialize an appropriate array to hold the TOMs
+    TOM <- array (0, dim = c(nSets, nGenes, nGenes))
+    # Calculate TOMs in each individual data set
+    for (set in 1:nSets) {
+      TOM [set, , ] <- WGCNA::TOMsimilarity (Adjacencies [set, , ], TOMType = "signed") }
+    
+    # 3. Scaling the TOM
+    # Define the reference percentile
+    scaleP = 0.95
+    TOMScalingSamples <- list ()
+    # These are TOM values at reference percentile
+    scaleQuant <- rep (1, nSets)
+    # Scaling powers to equalize reference TOM values
+    scalePowers <- rep (1, nSets)
+    # Loop over sets
+    for (set in 1:nSets){
+      # Select the sampled TOM entries
+      TOMScalingSamples [[set]] <- as.dist (TOM [set, , ])
+      # Calculate the 95th percentile
+      scaleQuant [set] <- quantile (TOMScalingSamples [[set]],
+                                    probs = scaleP, type = 8);
+      # Scale the male TOM
+      if (set>1){
+        scalePowers [set] = log (scaleQuant [1])/log (scaleQuant [set]);
+        TOM [set, ,] = TOM [set, ,]^scalePowers [set];
+      }
+    }
+    # 4. Consensus Network
+    for (pscale in c(0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8)){
+      consensusTOM <- pquantile (prob = pscale, 
+                                 TOM[1, , ], TOM[2, , ], TOM[3, , ], TOM[4, , ], TOM[5, , ],
+                                 TOM[6, , ], TOM[7, , ], TOM[8, , ], TOM[9, , ], TOM[10, , ], 
+                                 TOM[11, , ], TOM[12, , ], TOM[13, , ], TOM[14, , ], TOM[15, , ], 
+                                 TOM[16, , ], TOM[17, , ], TOM[18, , ], TOM[19, , ], TOM[20, , ])
+    
+      colnames (consensusTOM) <- rownames (consensusTOM) <- rownames (v_BatchMus$E)
+      # 5. dissTOM
+      dissTOM <- 1 - consensusTOM
+      save (dissTOM, file = paste0 ("Outputs/ConsensusWGCNA/dissTOM/dissTOM_Consensus", pscale, ".RData"))
+    }
+  }
+  
+  filenames <- list.files (path = "Outputs/ConsensusWGCNA/dissTOM/", full.names = T)
+  
+  for (dissTOMfile in filenames) {
+    load (dissTOMfile)
+    pscale <- gsub (".*Consensus|.RData", "", dissTOMfile)
+    # Hierarchical gene clustering (according to the dissimilarity matrix)
+    geneTree <- flashClust::flashClust (as.dist (dissTOM), method = "average")
+    save (dissTOM, geneTree, file = paste0 ("Outputs/ConsensusWGCNA/dissTOM/dissTOM_Consensus", pscale, ".RData"))
+    # 6. Module Detection
+    # Power = 8;  MinModuleSize = 20; deepSplit = 0; CutHeight = 0.2
+    # Module detection
+    # Set the minimum module size 
+    minModuleSize <- 20
+    deepSplit <- 0
+    # Module detection by cutting branches
+    dynamicMods <- dynamicTreeCut::cutreeDynamic (dendro = geneTree, distM = dissTOM,
+                                                  method = "hybrid", deepSplit = deepSplit,
+                                                  pamRespectsDendro = FALSE,
+                                                  minClusterSize = minModuleSize)
+    # Convert labels to colors for plotting
+    dynamicColors <- WGCNA::labels2colors (dynamicMods)
+    # Calculate eigengenes (clustring modules based on expression similarities)
+    MEList <- WGCNA::moduleEigengenes (t (v_BatchMus$E), colors = dynamicColors)
+    MEs <- MEList$eigengenes
+    NAMES <- colnames (dissTOM)
+    save (dynamicColors, geneTree, NAMES, file = paste0 ("Outputs/ConsensusWGCNA/ModuleDetection/ModuleDetection_Consensus", pscale, ".RData"))
+    # 7. Merge Modules
+    SAVEPATH <- "Outputs/ConsensusWGCNA/MergeModules/"
+    # Merging similar modules
+    CutHeight <- 0.2
+    # Call an automatic merging function
+    merge <- WGCNA::mergeCloseModules (t (v_BatchMus$E), dynamicColors,
+                                       cutHeight = CutHeight,
+                                       verbose = 3, corFnc = bicor) 
+    # The merged module colors
+    mergedColors <- merge$colors
+    # Eigengenes of the new merged modules:
+    mergedMEs <- merge$newMEs
+    write.csv (mergedMEs, paste0 (SAVEPATH, "ModuleEigengenes_merged_Consensus", pscale, ".csv"),
+               row.names = FALSE)
+    # Summary output of network analysis results (after merging)
+    module_colors <- unique (mergedColors)
+    All_genes_modules <- as.data.frame (cbind (NAMES, mergedColors)) 
+    # colnames (All_genes_modules) <- NULL
+    write.csv (All_genes_modules, paste0 (SAVEPATH, "All_genes_modules_Consensus", 
+                                          pscale, ".csv"), row.names = FALSE)
+    # names (colors) of the modules
+    nSamples <- nrow (t(v_BatchMus$E))
+    modNames <- substring (names (mergedMEs), 3)
+    geneModuleMembership <- as.data.frame (bicor (t(v_BatchMus$E), mergedMEs, 
+                                                  maxPOutliers = 0.1)) 
+    MMPvalue <- as.data.frame (corPvalueStudent (as.matrix (geneModuleMembership), nSamples)) 
+    names (geneModuleMembership) <- gsub ("ME", "MM", names (geneModuleMembership))
+    names (MMPvalue) <-  gsub ("ME", "p.MM", names (MMPvalue))
+    write.csv (merge (geneModuleMembership, MMPvalue, by=0, all = TRUE, sort = FALSE),
+               paste0 (SAVEPATH, "GeneModule_Membership_MMPvalue_Consensus", pscale, ".csv"),
+               col.names = TRUE, row.names = FALSE)
+    phenWGCNA <- v_BatchMus$targets %>%
+      mutate (group = as.numeric(group)) %>%
+      mutate (individual = as.numeric(gsub ("MD", "", individual))) %>%
+      select (-"sampleID") %>%
+      mutate (IsolationRNA = ifelse (IsolationRNA == "WithOutKit", 1, 0)) %>%
+      mutate (Hospital = ifelse (Hospital == "HMC", 1, 0)) %>%
+      mutate (lane = as.numeric (lane)) %>%
+      mutate (batch = as.numeric (batch))
+    # Module membership values and gene significance
+    for (j in 1 : length (phenWGCNA) [ 1 ]) {
+      # Define interested variable of datTrait
+      traitOfInterest <- as.data.frame (phenWGCNA [, j ])
+      names (traitOfInterest) <-  colnames (phenWGCNA) [ j ]
+      ## Relating modules to external clinical traits and identifying important genes
+      nGenes <- ncol (t (v_BatchMus$E))
+      nSamples <- nrow (t (v_BatchMus$E))
+      moduleTraitCor <- matrix (nrow = dim (mergedMEs) [ 2 ], ncol = dim (phenWGCNA) [ 2 ]) 
+      colnames (moduleTraitCor) <- paste0 ("Cor_", colnames (phenWGCNA))
+      rownames (moduleTraitCor) <- colnames (mergedMEs) 
+      for (trait in colnames(phenWGCNA)) {
+        moduleTraitCor [, grep (trait, colnames (moduleTraitCor)) ] <-
+            cor (mergedMEs, phenWGCNA [, trait ], use = "pairwise.complete.obs")
+      }
+      
+      moduleTraitPvalue <- corPvalueStudent (moduleTraitCor, nSamples)
+      colnames (moduleTraitPvalue) <- paste0 ("Pvalue_", colnames (moduleTraitPvalue))
+      # Writing the tables down with modules and correlation
+      write.csv (merge (moduleTraitCor, moduleTraitPvalue, by = 0, all = TRUE, 
+                        sort = FALSE),
+                 paste0 (SAVEPATH, "ModuleTrait_Cor_Pvalue_Consensus", pscale, ".csv"), 
+                 col.names = TRUE, row.names = FALSE) 
+      # correlation matrix of each gene and each traits
+      geneTraitSignificance <- as.data.frame (cor (t (v_BatchMus$E), traitOfInterest,
+                                                   use = 'pairwise.complete.obs'))
+      GSPvalue <- as.data.frame (corPvalueStudent (as.matrix (geneTraitSignificance), nSamples))
+      names (geneTraitSignificance) <- paste0 ("GS.", names (traitOfInterest))
+      names (GSPvalue) <- paste0 ("p.GS.", names (traitOfInterest))
+      write.csv (merge (geneTraitSignificance,  GSPvalue, by=0, all = TRUE, sort = FALSE), 
+                 paste0 (SAVEPATH, colnames (phenWGCNA)[ j ], "_GeneTrait_Significance_GSPvalue_Consensus", pscale, ".csv"), 
+                 col.names = TRUE, row.names = FALSE)
+    }
+    }
+}
+
+# 8. Coexpressed Pairs 
+if (! file.exists ("Outputs/ConsensusWGCNA/CoexpressedPairs/Consensus0.1.RData")) {
+  filenames <- list.files (recursive = TRUE, pattern = "All_genes_modules", 
+                            path = "Outputs/ConsensusWGCNA/MergeModules/", full.names = TRUE)	
+  SAVEPATH <- "Outputs/ConsensusWGCNA/CoexpressedPairs/"
+  for (file in filenames){
+    Genes_Modules <- read.csv (file)
+    # remove genes which were not clustered (grey module)
+    Genes_Modules <- Genes_Modules [ Genes_Modules$mergedColors != "grey", ]
+    Modules <- unique (Genes_Modules$mergedColors)
+    All_pairs <- c ()
+    for (module in 1 : length (Modules)) { 
+      subset <- Genes_Modules [ Genes_Modules$mergedColors == Modules [ module ], ]
+      # subset$NAMES <- gsub ("\\..*", "", subset$NAMES)
+      Genes <- as.character (sort (subset$NAMES))
+      Pairs <- as.data.frame (t (combn (Genes, 2,)))
+      # Pairs$module <- Modules [ module ] 
+      All_pairs [[ module ]] <- Pairs
+      }
+    All_pairs <- as.data.frame (do.call (rbind, All_pairs))
+    print (head (All_pairs))
+    print (dim (All_pairs))
+    # All_pairs$module <- NULL
+    save (All_pairs, file = paste0 (SAVEPATH,
+                                    gsub (".*All_genes_modules_|.csv", "", file), ".RData"))
+  }
+}
+
+# 9. Overlap
+if (! file.exists ("Outputs/ConsensusWGCNA/OverlabCP_KP/OverlapCP_KP.RData")) {
+  load ("Outputs/WGCNA/KnowledgeNetwork/Reactome_KnowledgePairs.RData")
+  
+  All_Knowledge_pairs <- sapply (All_Knowledge_pairs, as.character)
+  filenames <- list.files (recursive = TRUE, path = "Outputs/ConsensusWGCNA/CoexpressedPairs", full.names = TRUE)	
+  # length (Annotated_genes) ## No. of genes with Reatome annotation in GSE36398 dataset
+  Overlap_all <- c()
+  for (file in filenames){
+    load (file)
+    Coexpressed_pairs <- sapply (All_pairs, as.character) ; rm (All_pairs)
+    Annotated_Coexpressed_pairs <- unique (Coexpressed_pairs [ Coexpressed_pairs [, "V1"] %in% 
+                                                                 Annotated_genes &
+                                                                 Coexpressed_pairs [, "V2"] %in%
+                                                                 Annotated_genes, ])
+    Annotated_Coexpressed_genes <- unique (c (Annotated_Coexpressed_pairs [, "V1"],
+                                              Annotated_Coexpressed_pairs [, "V2"]))
+    N <- length (Annotated_Coexpressed_genes) ## Co-expressed and annotated genes
+    All_possible_pairs <- (length (Annotated_genes) * (length (Annotated_genes) - 1)) / 2 
+
+    # Annotated_Coexpressed_pairs <- apply (Annotated_Coexpressed_pairs[, c ("V1", "V2") ], 1, FUN = function (x) paste(sort(x), collapse = "-"))
+    Pairs <- merge (Annotated_Coexpressed_pairs, All_Knowledge_pairs)
+    print (dim (Pairs))
+    # Annotated_Coexpressed_pairs <- Annotated_Coexpressed_pairs [, c (2, 1) ]
+    # colnames (Annotated_Coexpressed_pairs) <- colnames (All_Knowledge_pairs)
+    # Pairs1 <- merge (Annotated_Coexpressed_pairs, All_Knowledge_pairs)
+    # print (dim (Pairs1))
+    # Pairs <- unique(rbind (Pairs, Pairs1))
+    # print (dim (Pairs))
+    SM_SP <- dim (Pairs) [ 1 ]
+    SM_nSP <- dim (Annotated_Coexpressed_pairs) [ 1 ] - SM_SP
+    nSM_SP <- dim (All_Knowledge_pairs) [ 1 ] - SM_SP
+    nSM_nSP <- All_possible_pairs - (SM_SP + SM_nSP + nSM_SP)
+    table2_2 <- rbind (c (SM_SP, nSM_SP), c (SM_nSP, nSM_nSP))
+    Ftest <- fisher.test (table2_2)
+    OutPut <- data.frame (Network = gsub (".*\\/|.RData", "", file),
+                          No_Annotated_Coexpressed_genes = length (Annotated_Coexpressed_genes),
+                          Ftest = Ftest$p.value, odds_ratio = Ftest$estimate,
+                          SM_SP = SM_SP, SM_nSP = SM_nSP, nSM_SP = nSM_SP, nSM_nSP = nSM_nSP)
+    rownames(OutPut) <- NULL
+    print (OutPut)
+    Overlap_all [[gsub (".*\\/|.RData", "", file)]] <- OutPut
+  }
+  Overlap_all <- data.table::rbindlist (Overlap_all)
+  save (Overlap_all, file = "Outputs/ConsensusWGCNA/OverlabCP_KP/OverlapCP_KP.RData")
+}
+
+# 10. Settings summary
+if (! file.exists ("Outputs/ConsensusWGCNA/OverlabCP_KP/SettingsSummary.RData")) {
+  rm (list = ls())
+  load ("Outputs/ConsensusWGCNA/OverlabCP_KP/OverlapCP_KP.RData")
+  # head (Overlap_all)
+  filenames <- list.files (recursive = TRUE, path = "Outputs/ConsensusWGCNA/MergeModules/", pattern = "All_genes_modules", full.names = TRUE)
+  SettingsSummary <- matrix (NA, nrow = length (filenames), ncol = 8)
+  rownames (SettingsSummary) <- gsub (".*All_genes_modules_|.csv", "", filenames)
+  for (file in filenames) {
+    x <- read.csv (file)
+    setting <- gsub (".*All_genes_modules_|.csv", "", file)
+    SettingsSummary [ setting, ] <- c (length (unique (x [ x$mergedColors == "grey", 1 ])), 
+                                       length (table (x$mergedColors)) - 1,
+                                       summary (as.vector (table (x [x$mergedColors != "grey",
+                                                                     ]$mergedColors))))
+                                       }
+  colnames (SettingsSummary) <- c ("GreyM.size", "NoModules", "MinM.Size", "1stQ", "MedianM.Size",
+                                   "MeanM.Size", "3stQ", "MaxM.Size")
+  # The final setting table
+  Setting <- merge (Overlap_all, as.data.frame (SettingsSummary) %>% 
+                      tibble::rownames_to_column(var = "Network"), by = "Network")
+  save (Setting, file = "Outputs/ConsensusWGCNA/OverlabCP_KP/SettingsSummary.RData") } else {
+    rm (list = prob::setdiff (ls (), c ("v_BatchMus", "Data")))
+    load ("Outputs/ConsensusWGCNA/OverlabCP_KP/SettingsSummary.RData")
+  }
+```
+
+### Analysis of variance
+
+### Aim of this analysis
+Quantifying the relative contribution of technical and biological variation to the total variation and identifying the most important sources of technical variation.
+
+### The input data
+Normalized and transformed data: the mean-variance trend is removed (voom (limma) output).
+Linear model is fitted for each gene considering muscle type, individual, isolation protocol, RIN score, concentration, library batch, sequencing lane, and library size as fixed effects.
+
+```{r AnalysisOfVariance, echo = FALSE, warning = FALSE}
+# Creating a design matrix
+design <- model.matrix (~0 + group + individual + 
+                          batch, data = Data$D_BatchMus$samples )
+colnames (design) <- gsub ("group|individual", "", colnames (design))
+# design
+
+VarPart <- matrix (data = NA, nrow = nrow (v_BatchMus$E), ncol = 7)
+colnames (VarPart) <- c ("Muscle type", "Individual", "RIN score",
+                         "Concentration", "Library batch", "Library size",
+                         "Residuals")
+rownames (VarPart) <- rownames (v_BatchMus$E)
+# Scaling the numeric factors
+v_BatchMus$targets [, c (2, 10, 11)] <- scale (v_BatchMus$targets [, c (2, 10, 11)], center = T, scale = T) 
+# fit linear model for each gene (including all factors as fixed effects)
+for (gene in 1:nrow (v_BatchMus$E)) {
+  AnovaData <- cbind (v_BatchMus$E [gene, ], v_BatchMus$weights[gene, ], v_BatchMus$targets)
+  colnames (AnovaData)[1:2]<- c ("value", "weights")
+  x <- anova (lm (value ~ 1 + group + individual + IsolationRNA + RIN + 
+                    Concen. + batch + lib.size, weights = weights, data = AnovaData))
+  VarPart [gene, ] <- 100* (x$`Sum Sq`)/sum ( (x$`Sum Sq`))
+}
+```
+
+Below plot shows percentage variation in muscle gene expression dataset explained by different sources:
+
+- Biological sources
+    - Muscle type and Individuals
+    
+- Technical sources
+    - RIN score, Concentration, Library preparation batch, and Library size
+
+```{r AnalysisOfVariancePlot, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 6, fig.width = 10}
+VarPartPlot <- reshape2::melt (VarPart)
+ggboxplot (VarPartPlot, x = "Var2", y = "value", 
+           add = "boxplot", add.params = list (fill = "white"), 
+           color = "Var2" , palette = c (rep ("darkgreen", 2), rep ("darkred", 5)), size = .6) +
+  labs (x = element_blank (), y = "%Variance explained") +
+  ggtitle (paste0 ("Variation sources in muscle expression dataset")) +
+  theme (axis.text.x = element_text (angle = 75, hjust = 1, vjust = 1), legend.position = "none")
+```
+
+### Selecting the proper quantile or percentile for the consensus network
+```{r SelectingBestSetting, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE}
+# Selecting the best setting considering the grey module size
+# < %30 in grey module
+# print ("< %30 in grey module")
+# SettingSubset0.3 <- Setting [ Setting$GreyM.size / nrow (v_BatchMus) < 0.3, ]
+# Selected setting
+print (Setting)
+rm (list = ls (pattern = "Setting"))
+
+CorFun <- function (data1, data2){
+  if (all (rownames (data1) != rownames (data2)) & 
+      all (colnames (data1) != colnames (data2))) print ("Check the input rownames")
+  COR <- matrix (NA, nrow = ncol (data1), ncol = 1)
+  rownames (COR) <- colnames (data1)
+  CORPval <- COR
+  for (i in colnames (data1)){
+    COR [i, 1] <- cor (data1 [, i], data2 [, i])
+    CORPval [i, 1] <- cor.test (data1 [, i], data2 [, i])$p.value
+  }
+  CorList <- list (Cor = COR, CorPval = CORPval)
+  return (CorList)
+}
+
+# nonconsensus
+load ("Outputs/WGCNA/dissTOM/dissTOMPower8.RData")
+TOM <- 1 - dissTOM; rm (dissTOM)
+All_genes_modules <- read.csv ("Outputs/WGCNA/MergeModules/All_genes_modules_Power8MinModuleSize20deepSplit0CutHeight0.2.csv")
+all (colnames(TOM) == All_genes_modules$NAMES)
+COL <- All_genes_modules$mergedColors
+ConnectivityMat <- intramodularConnectivity (TOM, COL)
+
+for (pscale in c(0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8)){
+  # print (pscale)
+  load (paste0 ("Outputs/ConsensusWGCNA/dissTOM/dissTOM_Consensus", pscale, ".RData"))
+  consensusTOM <- 1 - dissTOM; rm (dissTOM)
+  # assign(paste0 ("consensusTOMConsensus", pscale), consensusTOM)
+  Cor_NonconsensusConsensus <- CorFun (TOM, consensusTOM)
+  colnames (Cor_NonconsensusConsensus$Cor) <- colnames (Cor_NonconsensusConsensus$CorPval) <- pscale
+  print (plot (Cor_NonconsensusConsensus$Cor [, 1], VarPart[, 2], main = pscale))
+  x <- as.vector (Cor_NonconsensusConsensus$Cor [, 1])
+  y <- as.vector (VarPart [, 2])
+  print (pscale)
+  print (cor (x, y))
+  assign (paste0 ("Cor_NonconsensusConsensus", pscale), Cor_NonconsensusConsensus)
+
+  All_genes_modules <- read.csv (paste0 ("Outputs/ConsensusWGCNA/MergeModules/All_genes_modules_Consensus", pscale, ".csv"))
+  all (colnames(consensusTOM) == All_genes_modules$NAMES)
+  COL <- All_genes_modules$mergedColors
+  ConnectivityMat <- intramodularConnectivity (consensusTOM, COL)
+  
+  rm (consensusTOM)
+  assign (paste0 ("ConnectivityMatConsensus", pscale), ConnectivityMat)
+  # print (scaleFreeFitIndex (ConnectivityMat$kTotal, nBreaks = 10, removeFirst = FALSE))
+  print (scaleFreePlot (ConnectivityMat$kTotal, nBreaks = 10, truncated = FALSE, removeFirst = FALSE, main = paste0 ("percentile: ", pscale, "\n")))
+}
+
+load ("Outputs/WGCNA/Adjacency/AdjacencyPower8.RData")
+all (colnames(Adjacency) == All_genes_modules$NAMES)
+ConnectivityMatAdj <- intramodularConnectivity (Adjacency, COL)
+cor(ConnectivityMatAdj$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.1$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.2$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.25$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.3$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.4$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.5$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.6$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.7$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.75$kTotal, ConnectivityMat$kTotal)
+cor(ConnectivityMatConsensus0.8$kTotal, ConnectivityMat$kTotal)
+
+
+Consensus <- "Consensus0.4"
+```
+
+```{r ColSetup, include = FALSE}
+# RNA isolation protocol
+WithKit <- c ("MD06_GRA_Sam25", "MD07_GRA_Sam23", "MD08_GRA_Sam65", 
+              "MD10_GRA_Sam106", "MD12_GRA_Sam139")
+WithoutKit <- c ("MD06_GRA_Sam148", "MD07_GRA_Sam73_RedoSam15", "MD08_GRA_Sam152_RedoSam39", 
+                 "MD10_GRA_Sam36", "MD12_GRA_Sam116")
+# Color and pch
+pch.muscle <- c ("GAL" = 1, "GRA" = 2, "REF" = 3, "SEM" = 4, "SED" = 5, "VAL" = 6, "VAM" = 7)
+# col.muscle <- c ("GAL" = "#800000", "GRA" = "#4363d8", "REF" = "#f032e6", 
+#                  "SED" = "#ffe119", "SEM" = "#3cb44b", "VAL" = "#e6beff", 
+#                  "VAM" = "#f58231")
+# For paper 
+col.muscle <- c ("GAL" = "#FF3333", "GRA" = "#66FFFF", "REF" = "#FF66FF", 
+                 "SED" = "#009999", "SEM" = "#33CCCC", "VAL" = "#FF99FF", 
+                 "VAM" = "#FFCCFF")
+col.batch <- c ("1" = "#e6194B", "2" = "#3cb44b", "3" = "#4363d8", "4" = "#911eb4", "5" = "black")
+col.individual <- c ("MD06" = "#A6CEE3", "MD07" = "#1F78B4", "MD08" = "#B2DF8A", 
+                     "MD10" = "#33A02C", "MD11" = "#FB9A99", "MD12" = "#E31A1C", 
+                     "MD13" = "#FDBF6F", "MD14" = "#FF7F00", "MD15" = "#66C2A5", 
+                     "MD16" = "#FC8D62", "MD17" = "#8DA0CB", "MD18" = "#E78AC3", 
+                     "MD19" = "#A6D854", "MD20" = "#FFD92F", "MD21" = "#E5C494", 
+                     "MD22" = "#B3B3B3", "MD26" = "#1B9E77", "MD27" = "#D95F02", 
+                     "MD28" = "#7570B3", "MD31" = "#E7298A")
+col.lane <- c ("L003.1" = "lightblue", "L004.1" = "darkblue", "L002.2" = "pink", "L004.2" = "red")
+col.RNA <- c ("WithKit" = "#bfef45", "WithOutKit" = "#f58231")
+col.Hos <- c ("EMC" = "green", "HMC" = "orange")
+
+# Colors and labels for plots
+MusLabPlot <- gsub ("MD[0-9][0-9]_|_Sam.*", "", colnames (v_BatchMus))
+MusColPlot <- col.muscle [match (gsub ("MD[0-9][0-9]_|_Sam.*", "", colnames (v_BatchMus)), 
+                                  names (col.muscle))]
+IndLabPlot <- gsub ("_.*", "", colnames (v_BatchMus))
+IndColPlot <- col.individual [match (gsub ("_.*", "", colnames (v_BatchMus)), 
+                                  names (col.individual))]
+BatchLabPlot <- v_BatchMus$targets$batch [match (colnames (v_BatchMus), rownames (v_BatchMus$targets))]
+BatchColPlot <- col.batch [match (v_BatchMus$targets$batch [match (colnames (v_BatchMus), 
+                                                          rownames (v_BatchMus$targets))], 
+                                names (col.batch))]
+RNALabPlot <- v_BatchMus$targets$IsolationRNA [match (colnames (v_BatchMus), rownames (v_BatchMus$targets))]
+RNAColPlot <- col.RNA [match (v_BatchMus$targets$IsolationRNA [match (colnames (v_BatchMus), 
+                                                             rownames (v_BatchMus$targets))], 
+                                names (col.RNA))]
+LaneLabPlot <- v_BatchMus$targets$lane [match (colnames (v_BatchMus), rownames (v_BatchMus$targets))]
+LaneColPlot <- col.lane [match (v_BatchMus$targets$lane [match (colnames (v_BatchMus), 
+                                                       rownames (v_BatchMus$targets))], 
+                                names (col.lane))]
+HosLabPlot <- v_BatchMus$targets$Hospital [match (colnames (v_BatchMus), rownames (v_BatchMus$targets))]
+HosColPlot <- col.Hos [match (v_BatchMus$targets$Hospital [match (colnames (v_BatchMus), 
+                                                       rownames (v_BatchMus$targets))], 
+                                names (col.Hos))]
+```
+
+### Enrichment for celltype markers in modules
+```{r MarkersInModules, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE, fig.height = 7, fig.width = 14}
+filenames <- list.files (recursive = TRUE, path = "Outputs/ConsensusWGCNA", pattern = paste0 (Consensus, ".csv"), full.names = TRUE)
+
+# Importing gene-modules table
+GeneModules <- read.csv (filenames [grepl ("All_genes_modules", filenames)]) %>%
+  mutate (hgnc_symbol = v_BatchMus$genes$hgnc_symbol [match (NAMES, v_BatchMus$genes$ensembl_gene_id)])
+
+# Rename modules (colors to numbers)
+Module_rename <- data.frame (Module = prob::setdiff (sort (unique (GeneModules$mergedColors)), "grey"), 
+                             Rename = paste ("M", seq.int (length (unique(GeneModules$mergedColors))-1), sep = "."), stringsAsFactors = FALSE) 
+
+GeneModules$mergedColors <- Module_rename$Rename [ match (GeneModules$mergedColors, Module_rename$Module) ] 
+GeneModules$mergedColors [is.na (GeneModules$mergedColors)] = "grey"
+
+# Importing marker list
+load ("MarkerGenesLiftOver/Markers.RData")
+
+CellTypes <- unique (markers$`Cell-type`)
+
+# Markers distribution in the modules
+CellMarkersInModules <- data.frame (table (GeneModules$mergedColors)) %>% mutate (Var1 = as.character (Var1))
+colnames (CellMarkersInModules) <- c ("Module", "Size")
+
+for (cell in CellTypes){
+  # cell markers
+  GeneMarkers <- markers$Gene [markers$`Cell-type`== cell]
+  
+  # Modules in which the cell markers are 
+  NoMarkers <- as.data.frame (table (GeneModules %>% filter (hgnc_symbol %in% GeneMarkers) %>% .$mergedColors))
+  colnames (NoMarkers) <- c ("Module", gsub (" ", "", cell))
+  
+  CellMarkersInModules <- merge (CellMarkersInModules, NoMarkers, all = T)
+}
+CellMarkersInModules [is.na (CellMarkersInModules)] = 0
+
+# ORDER <- c ("EndothelialCells" = 11, "LUM+FAPCells" = 2, "SatelliteCells" = 6, "Pericytes" = 7,
+#             "FBN1+FAPCells" = 1, "NKCells" = 13, "PCVEndothelialCells" = 9, "TandBCells" = 12,
+#             "SmoothMuscleCells" = 4, "MyeloidCells" = 8, "Fasttwitch" = 3, "Slowtwitch" = 10, 
+#             "Tendon" = 5)
+
+CellMarkersInModulesPlot <- CellMarkersInModules %>% 
+  dplyr::rename (`Endothelial Cells` = EndothelialCells, `LUM+ FAP Cells` = `LUM+FAPCells`,
+          `Satellite Cells` = SatelliteCells, `FBN1+ FAP Cells` = `FBN1+FAPCells`,
+          `PCV Endothelial Cells` = PCVEndothelialCells, `T and B Cells` = TandBCells,
+          `Smooth Muscle Cells` = SmoothMuscleCells, `Myeloid Cells` = MyeloidCells,
+          `Fast twitch` = Fasttwitch, `Slow twitch` = Slowtwitch, `NK Cells` = NKCells) %>% 
+  mutate (Module = paste0 (Module, " (", Size, " genes)")) %>% 
+  reshape2::melt (-c (1, 2), id.var = "Module") %>%
+  filter (Module != "grey (1582 genes)")
+
+CellMarkersInModulesPlot <- CellMarkersInModulesPlot [order (as.numeric (gsub ("M.| .*", "", CellMarkersInModulesPlot$Module))), ] %>% mutate (Module = factor (Module, levels = unique (Module)))
+
+ 
+ORDER <- c("M.14 (162 genes)" = 1, "M.16 (248 genes)" = 2, "M.23 (1125 genes)" = 3, "M.4 (262 genes)" = 4, 
+           "M.33 (538 genes)" = 5, "M.31 (945 genes)" = 6, "M.18 (220 genes)" = 7,"M.13 (300 genes)" = 8,
+           "M.24 (587 genes)" = 9, "M.17 (176 genes)" = 10, "M.7 (308 genes)" = 11, "M.3 (139 genes)" = 12, 
+           "M.32 (236 genes)" = 13, "M.30 (75 genes)" = 14, "M.15 (169 genes)" = 15, "M.12 (429 genes)" = 16,
+           "M.6 (1459 genes)" = 17, "M.10 (1376 genes)" = 18, "M.11 (299 genes)" = 19, "M.25 (188 genes)" = 20,
+           "M.5 (190 genes)" = 21, "M.8 (127 genes)" = 22, "M.27 (222 genes)" = 23, "M.34 (628 genes)" = 24,
+           "M.29 (38 genes)" = 25, "M.21 (113 genes)" = 26, "M.1 (136 genes)" = 27, "M.26 (228 genes)" = 28,
+           "M.9 (732 genes)" = 29, "M.19 (825 genes)" = 30, "M.22 (368 genes)" = 31, "M.28 (333 genes)" = 32,
+           "M.20 (181 genes)" = 33, "M.2 (625 genes)" = 34, "grey (1582 genes)" = 35)
+
+       
+CellMarkersInModulesPlot$order <- ORDER[match (CellMarkersInModulesPlot$Module, names (ORDER))]
+# Add hyphen 
+levels(CellMarkersInModulesPlot$variable)[levels(CellMarkersInModulesPlot$variable) == "Slow twitch"] = "Slow-twitch"
+levels(CellMarkersInModulesPlot$variable)[levels(CellMarkersInModulesPlot$variable) == "Fast twitch"] = "Fast-twitch"
+
+
+(Tosave <- ggplot (CellMarkersInModulesPlot, aes (x = forcats::fct_reorder (Module, order), y = variable)) + 
+  geom_tile (aes (fill = value), width = 0.9, height = 0.9) + 
+  scale_fill_gradientn (colours = c ("white", "red"),
+                        values = scales::rescale (c (0, 15, 31))) +
+  geom_text (aes (label = value)) + 
+  # ggtitle ("Loading of cell type markers in modules")  +
+  labs (x = NULL, y = NULL, fill = "No. Genes") +
+  theme (axis.text = element_text (size = 12), axis.ticks = element_blank(),
+         axis.text.x = element_text (angle = 90, hjust =  1, vjust = 0.5),
+         axis.title = element_text (size= 12, face = "bold"), legend.position = "none") +
+  scale_y_discrete(position = "right"))
+ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 12, filename = "Modules_cellMArkers.tif")
+
+
+# Calculating enrichment p-value
+CellMarkersInModules [ nrow (CellMarkersInModules) + 1, -1 ] = colSums (CellMarkersInModules [-1])
+CellMarkersInModules [is.na (CellMarkersInModules)] = "AllModules"
+CellMarkersInModulesPvalue <- CellMarkersInModules 
+for (i in 1:(nrow (CellMarkersInModules) - 1)) {
+  for (j in 3:ncol (CellMarkersInModules)) {
+    data <- CellMarkersInModules [c (i,36), c (2,j)]
+    pval <- unlist (fisher.test (data, alternative = "less")["p.value"])
+    CellMarkersInModulesPvalue [i, j] <- pval  
+  }
+}
+
+CellMarkersInModulesPvaluePlot <- CellMarkersInModulesPvalue [ -36, ] %>% 
+  mutate (Module = paste0 (Module, " (", Size, " genes)")) %>% 
+  reshape2::melt (-c (1, 2), id.var = "Module") %>% 
+  mutate (value = round (value, digits = 2))
+CellMarkersInModulesPvaluePlot <- CellMarkersInModulesPvaluePlot [order (as.numeric (gsub ("M.| .*", "", CellMarkersInModulesPvaluePlot$Module))), ] %>% mutate (Module = factor (Module, levels = unique (Module)))
+
+
+CellMarkersInModulesPvaluePlot$order <- ORDER[match (CellMarkersInModulesPvaluePlot$Module, names (ORDER))]
+
+ggplot (CellMarkersInModulesPvaluePlot, aes (x = forcats::fct_reorder (Module, order), y = variable)) + 
+  geom_tile (aes (fill = value)) + 
+  scale_fill_gradientn (colours = c ("white", "red", "black"),
+                        values = scales::rescale (c (0, 0.05, 0.1, 0.5, 1))) +
+  geom_text (aes (label = value), size = 2) +
+  ggtitle ("Loading of cell type markers in modules (pvalue)")  +
+  labs (x = NULL, y = NULL, fill = "pvalue") +
+  theme (axis.text = element_text (size = 16),
+         axis.text.x = element_text (angle = 90, hjust =  1, vjust = 0.5),
+         axis.title = element_text (size= 16, face = "bold"), )
+
+# Cell type markers PC1 association with ME
+# Module eigengene (ME) vector
+mergedMEs <- read.csv (filenames [grepl ("ModuleEigengenes", filenames)]) 
+rownames (mergedMEs) <- colnames (v_BatchMus)
+colnames (mergedMEs)[colnames (mergedMEs) != "MEgrey"] <- Module_rename$Rename [ match (gsub ("ME", "", colnames (mergedMEs)[colnames (mergedMEs) != "MEgrey"]), Module_rename$Module) ] 
+colnames (mergedMEs)[colnames (mergedMEs) == "MEgrey"] = "grey"
+
+load ("Outputs/CellTypeComposition/CellTypesGeneMarkersPC1.RData")
+load ("Outputs/CellTypeComposition/CellTypesGeneMarkersEigengene.RData")
+
+CorFun <- function (data1, data2){
+  if (all (rownames (data1) != rownames (data2))) print ("Check the input rownames")
+  COR <- matrix (NA, ncol (data1), ncol (data2))
+  CORPval <- matrix (NA, ncol (data1), ncol (data2))
+  rownames (COR) <- rownames (CORPval) <- colnames (data1)
+  colnames (COR) <- colnames (CORPval) <- colnames (data2)
+  for (i in colnames (data1)){
+    for (j in colnames (data2)){
+      COR [i, j] <- cor (data1 [, i], data2 [, j])
+      CORPval [i, j] <- cor.test (data1 [, i], data2 [, j])$p.value
+    }
+  }
+  CorList <- list (Cor = COR, CorPval = CORPval)
+  return (CorList)
+}
+
+for (ExpSum in c (#"CellTypesPC1",
+                   "CellTypesEigengene")){
+  CellTypesSum <- get (ExpSum)
+  CellTypeModuleAsso <- CorFun (CellTypesSum, mergedMEs)
+  CellTypeModuleAssoPlot <- CellTypeModuleAsso$Cor %>%
+    reshape2::melt () %>% 
+    mutate (value = round (value, digits = 2)) %>%
+    mutate (CorPval = paste0 (value, "(", CellTypeModuleAsso$CorPval %>%
+                                reshape2::melt () %>% 
+                                mutate (value = round (value, digits = 3)) %>%
+                                .$value, ")"))
+  CellTypeModuleAssoPlot <- CellTypeModuleAssoPlot [order (as.numeric (gsub ("M.", "", CellTypeModuleAssoPlot$Var2))), ] %>%
+    mutate (Var2 = factor (Var2, levels = unique (Var2)))
+  CellTypeModuleAssoPlot$order <- ORDER[match (CellTypeModuleAssoPlot$Var2, gsub (" .*", "", names (ORDER)))]
+  print (ggplot (CellTypeModuleAssoPlot, aes (x = forcats::fct_reorder (Var2, order), y = Var1)) + 
+           geom_tile (aes (fill = value)) + 
+           scale_fill_gradientn (colours = c ("blue", "white", "red"),
+                                 values = scales::rescale (c (-1, -0.5, 0, 0.5, 1))) +
+           geom_text (aes (label = value), size = 3) +
+           ggtitle (paste0 ("Cell type markers ", ifelse (ExpSum == "CellTypesPC1" , "PC1", "Eigengene"), " association with modules ME")) +
+           labs (x = NULL, y = NULL, fill = "Correlation") +
+           theme (axis.text = element_text (size = 16),
+                  axis.text.x = element_text (angle = 90, hjust =  1, vjust = 0.5),
+                  axis.title = element_text (size= 16, face = "bold")))
+}
+
+```
+
+### Module-trait association
+```{r ModuleTrait, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 10}
+# Sample information
+phenWGCNA <- v_BatchMus$targets [, c (1, 5, 12)]
+
+# Module eigengene (ME) vector
+mergedMEs <- read.csv (filenames [grepl ("ModuleEigengenes", filenames)]) 
+rownames (mergedMEs) <- colnames (v_BatchMus)
+colnames (mergedMEs)[colnames (mergedMEs) != "MEgrey"] <- Module_rename$Rename [ match (gsub ("ME", "", colnames (mergedMEs)[colnames (mergedMEs) != "MEgrey"]), Module_rename$Module) ] 
+colnames (mergedMEs)[colnames (mergedMEs) == "MEgrey"] = "grey"
+
+# Gene modules
+Module_sizes <- as.data.frame (table (GeneModules$mergedColors))
+
+# Final table with sample informations and module eigengene 
+complete_info <- merge (phenWGCNA, mergedMEs, by = "row.names") 
+# complete_info <- complete_info %>% 
+#   mutate(individual = as.factor (individual)) %>%
+#   mutate(group = as.factor (group)) %>%
+#   mutate(age = as.integer (age))
+
+Module_list <- colnames (complete_info) [ grep ("M.", colnames (complete_info)) ]
+
+# Considering muscle and age as fix effects in a single model (individuals were considered as random effect)
+# Old:
+# model1 = lme (Module_eigengene_vector ~ muscle + age, random=~1|individual, data, method = "REML")
+# model2 = gls (Module_eigengene_vector ~ muscle + age, data, method = "REML")
+# New:
+# model = lmerTest::lmer (Module_eigengene_vector ~ muscle + (1|individual), data, REML = FALSE)
+# anova (model) # Fixed effect 
+# ranova (model) # Droping the random effect and test the model
+
+ModuleTrait <- matrix (NA, nrow = length (Module_list), ncol = 2)
+rownames (ModuleTrait) <- Module_list
+colnames (ModuleTrait) <- c ("Muscle", "Individual")
+library (lmerTest)
+for (module in Module_list) {
+  fml <- as.formula (paste (noquote (module), "~ group + (1|individual)"))
+  model <- lmerTest::lmer (fml, data = complete_info, REML = TRUE)
+  ModuleTrait [module, ] <- c (anova (model)$`Pr(>F)`, ranova (model)$`Pr(>Chisq)`[2])
+}
+
+ModuleTraitAdj <- ModuleTrait
+for (factor in colnames(ModuleTrait)){
+  ModuleTraitAdj [ , factor] <- round (p.adjust (ModuleTrait [ , factor], method = "fdr"), 6)
+}
+ModuleTraitAdj <- as.data.frame (ModuleTraitAdj, as.is = T)
+ModuleTraitAdj$Module <- paste0 (Module_sizes$Var1, " (", Module_sizes$Freq, ")") [match (noquote (rownames (ModuleTraitAdj)), Module_sizes$Var1)]
+
+ModuleTraitAdjPlot <- reshape2::melt (ModuleTraitAdj) 
+ModuleTraitAdjPlot <- ModuleTraitAdjPlot [order (as.numeric (gsub ("M.| .*", "", ModuleTraitAdjPlot$Module))), ] %>% mutate (Module = factor (Module, levels = unique (Module))) 
+
+ggplot (ModuleTraitAdjPlot, aes (x = variable, y = Module)) + 
+  geom_tile (aes (fill = value)) + 
+  scale_fill_gradientn (colours = c ("white", "red", "black"),
+                        values = scales::rescale (c (0, 0.05, 0.1, 0.5, 1))) +
+  geom_text (aes (label = format (value, digits = 2))) +
+  ggtitle ("Modules-factors association")  +
+  labs (x = NULL, y = NULL, fill = "FDR") +
+  theme (axis.text = element_text (size = 16),
+         axis.title = element_text (size= 16, face = "bold"))
+```
+
+#### ME Plots
+```{r ModuleTraitPlots1, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 6}
+filenames <- list.files (recursive = TRUE, path = "Outputs/ConsensusWGCNA", pattern = paste0 (Consensus, ".csv"), full.names = TRUE)
+
+# Sample information
+phenWGCNA <- v_BatchMus$targets [, c (1, 5, 12)]
+
+# Module eigengene (ME) vector
+mergedMEs <- read.csv (filenames [grepl ("ModuleEigengenes", filenames)]) 
+rownames (mergedMEs) <- colnames (v_BatchMus)
+colnames (mergedMEs)[colnames (mergedMEs) != "MEgrey"] <- Module_rename$Rename [ match (gsub ("ME", "", colnames (mergedMEs)[colnames (mergedMEs) != "MEgrey"]), Module_rename$Module) ] 
+colnames (mergedMEs)[colnames (mergedMEs) == "MEgrey"] = "grey"
+
+# Gene modules
+Module_sizes <- as.data.frame (table (GeneModules$mergedColors))
+
+# Final table with sample informations and module eigengene 
+complete_info <- merge (phenWGCNA, mergedMEs, by = "row.names") 
+
+All_modules_to_plot <- reshape2::melt (complete_info [-c (1, 4)], id.vars = c ("group", "individual")) %>% 
+  mutate (variable = paste0 (Module_sizes$Var1, " (", Module_sizes$Freq, ")") [match (noquote (variable), Module_sizes$Var1)]) %>%
+  filter (variable != "grey (1582)") %>%
+  mutate (variable = factor (variable, levels = unique (variable)))
+
+for (module in sort (as.character (unique (All_modules_to_plot$variable)))) {
+  p1 <- ggplot (All_modules_to_plot %>% filter (variable == module), aes (variable, value)) +
+    geom_boxplot (aes (fill = group), alpha = 0.5) + 
+    scale_fill_manual (values = col.muscle) + theme_bw () + 
+    labs (x = element_blank(), y = "Module eigengene") +
+    theme (axis.text = element_text (size = 12), axis.text.y = element_text (hjust = 1), 
+           axis.title = element_text (size = 12, face = "bold"), 
+           axis.ticks = element_blank (), plot.title = element_text (hjust = 0.5),
+           panel.grid = element_blank(), legend.title = element_blank())
+  # p1 + geom_dotplot (aes (group = group), fill = IndColPlot, binaxis = "y",
+  #                   stackdir = "center", position = position_dodge (width = .8),
+  #                   binwidth = 0.01, show.legend = FALSE) + 
+  #   geom_hline (yintercept = 0, linetype = "dashed", color = "grey") 
+  
+  
+  p2<- ggplot (All_modules_to_plot %>% filter (variable == module), aes (variable, value, fill = individual)) +
+    geom_boxplot (alpha = 0.5) + 
+    scale_fill_manual (values = col.individual) + theme_bw () + 
+    labs (x = element_blank(), y = "Module eigengene") +
+    theme (axis.text = element_text (size = 12), axis.text.y = element_text (hjust = 1), 
+           axis.title = element_text (size = 12, face = "bold"), 
+           axis.ticks = element_blank (), plot.title = element_text (hjust = 0.5),
+           panel.grid = element_blank(), legend.title = element_blank())
+  gridExtra::grid.arrange (cbind (ggplotGrob (p1), ggplotGrob (p2),
+                           size = "first"))
+}
+```
+
+#### MM and GS plots
+```{r ModuleTraitPlots2, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 6}
+Consensus <- "Consensus0.4"
+filenames <- list.files (recursive = TRUE, path = "Outputs/ConsensusWGCNA", pattern = paste0 (Consensus, ".csv"), full.names = TRUE)
+
+# Importing gene-modules table
+GeneModules <- read.csv (filenames [grepl ("All_genes_modules", filenames)]) %>%
+  mutate (hgnc_symbol = v_BatchMus$genes$hgnc_symbol [match (NAMES, v_BatchMus$genes$ensembl_gene_id)])
+
+# Rename modules (colors to numbers)
+Module_rename <- data.frame (Module = prob::setdiff (sort (unique (GeneModules$mergedColors)), "grey"), 
+                             Rename = paste ("M", seq.int (length (unique(GeneModules$mergedColors))-1), sep = "."), stringsAsFactors = FALSE) 
+
+GeneModules$mergedColors <- Module_rename$Rename [ match (GeneModules$mergedColors, Module_rename$Module) ] 
+GeneModules$mergedColors [is.na (GeneModules$mergedColors)] = "grey"
+
+# Module Membership (MM) 
+MM <- read.csv (filenames [grepl ("GeneModule_Membership", filenames)], row.names = 1, as.is = T, stringsAsFactors = F) 
+KEEP <- colnames (MM) [grep ("^MM", colnames (MM))]
+MM <- MM %>% select (KEEP)
+colnames (MM)[colnames (MM) != "MMgrey"] <- Module_rename$Rename [match (gsub ("MM", "", colnames (MM)[colnames (MM) != "MMgrey"]), Module_rename$Module)] 
+colnames (MM)[colnames (MM) == "MMgrey"] = "grey"
+
+# Gene Significance (GS) 
+GS_Muscle <- read.csv (filenames [grepl ("group_GeneTrait", filenames)], row.names = 1, as.is = T, stringsAsFactors = F) [1]
+
+for (module in sort (as.character (unique (GeneModules$mergedColors)))) {
+  GENES <- GeneModules %>% filter (mergedColors == module) %>% .$NAMES
+  verboseScatterplot (MM [rownames (MM) %in% GENES, module],
+                      GS_Muscle [rownames (GS_Muscle) %in% GENES, ],
+                      main = module,
+                      xlab = "Memebrship", ylab = "Gene Significance", abline = TRUE)
+  
+}
+```
+
+### Enrichment analysis
+```{r EnrichmentAnalysis, message = FALSE, warning = FALSE}
+rm (list = setdiff (ls (), c ("Data", "GeneModules", "v_BatchMus")))
+
+GP_all_modules <- c ()
+for (module in unique (GeneModules$mergedColors)) {
+  Gene_list <- GeneModules %>% filter (mergedColors == module) %>% .$NAMES
+  BG <- as.vector (GeneModules$NAMES)
+  GP <- gprofiler2::gost (Gene_list, organism = 'hsapiens', evcodes = TRUE,
+                          custom_bg = BG, correction_method = "fdr") 
+  GP <- GP$result
+  if (! is.null (GP) & module != "grey") {
+    ## Gene mapping
+    Gene_Symbols <- c ()
+    for (i in 1:nrow (GP)) {
+      print(i)
+      ENS <- GP [ i, "intersection" ]
+      ENS <- unique (unlist (strsplit (as.character (ENS), split = ",")))
+      Gene_Symbol <- c ()
+      for (j in ENS) {
+        Gene_Symbol [j] <- v_BatchMus$genes [v_BatchMus$genes$ensembl_gene_id == j, "hgnc_symbol"]
+        }
+      Gene_Symbols [[i]] <- paste (Gene_Symbol, collapse = ",")
+      }
+    Gene_Symbols <- do.call (rbind, Gene_Symbols)
+    GP <- cbind (GP, Gene_Symbols)
+    
+    # Generic Enrichment Map (for Cytoscape)
+    gem <- GP[GP$intersection_size > 3 & GP$term_size < 1000, c ("term_id", "term_name", "source", "p_value", "Gene_Symbols")]
+    if (nrow (gem) != 0) {
+      colnames (gem) <- c ("ID", "Description", "source", "p.Val", "Genes")
+      gem$FDR <- gem$p.Val
+      gem$Phenotype <- "+1"
+      gem <- gem [, c ("ID", "Description", "source", "p.Val", "FDR", "Phenotype", "Genes")]
+      head (gem)
+      gemSUB <- gem [gem$source %in% c ("WP", "REAC", "KEGG", "GO:BP", "GO:CC", "GO:MF"), c ("ID", "Description", "p.Val", "FDR", "Phenotype", "Genes")]
+      write.table (gemSUB, file = paste0 ("Outputs/ConsensusWGCNA/Enrichment/EnrichmentResults", module, ".txt"), sep = "\t", quote = F, row.names = F)
+      gemSUB <- gem [gem$source == "REAC", c ("ID", "Description", "p.Val", "FDR", "Phenotype", "Genes")]
+      write.table (gemSUB, file = paste0 ("Outputs/ConsensusWGCNA/Enrichment/EnrichmentResultsReactome", module, ".txt"), sep = "\t", quote = F, row.names = F)
+      gemSUB <- gem [gem$source == "HP", c ("ID", "Description", "p.Val", "FDR", "Phenotype", "Genes")]
+      write.table (gemSUB, file = paste0 ("Outputs/ConsensusWGCNA/Enrichment/EnrichmentResultsHP", module, ".txt"), sep = "\t", quote = F, row.names = F)
+      gemSUB <- gem [gem$source == "WP", c ("ID", "Description", "p.Val", "FDR", "Phenotype", "Genes")]
+      write.table (gemSUB, file = paste0 ("Outputs/ConsensusWGCNA/Enrichment/EnrichmentResultsWP", module, ".txt"), sep = "\t", quote = F, row.names = F)
+      gemSUB <- gem [gem$source == "KEGG", c ("ID", "Description", "p.Val", "FDR", "Phenotype", "Genes")]
+    write.table (gemSUB, file = paste0 ("Outputs/ConsensusWGCNA/Enrichment/EnrichmentResultsKEGG", module, ".txt"), sep = "\t", quote = F, row.names = F)
+    }
+    GP$Module <- module
+    GP_all_modules [[module]] <- GP
+  }
+}
+# The final table
+GP_all_modules <- do.call (rbind, GP_all_modules)
+GP_all_modules[c ("query", "significant", "precision", "recall")] <- NULL
+GP_all_modules <- GP_all_modules %>% mutate (parents = sapply (parents , toString))
+write.csv (GP_all_modules, paste0 ("Outputs/ConsensusWGCNA/Enrichment/EnrichmentResultsAllModules.csv"), row.names = F)
+GP_Filtered_all_modules <- GP_all_modules %>% filter (intersection_size > 3) %>% filter (term_size < 2000) 
+write.csv (GP_Filtered_all_modules, paste0 ("Outputs/ConsensusWGCNA/Enrichment/EnrichmentResultsIntersect3AllModules.csv"), row.names = F)
+save (GP_all_modules, GP_Filtered_all_modules, file = "Outputs/ConsensusWGCNA/Enrichment/EnrichmentResultsAllModules.RData")
+
+load ("Outputs/ConsensusWGCNA/Enrichment/EnrichmentResultsAllModules.RData")
+
+GP_Filtered_all_modules %>% filter (Module == "M.6") %>% filter (term_size < 1000) %>% arrange (p_value) %>% filter (source == "GO:BP") %>% .$parents %>% table()
+```
+
+### comparison between original and consensus networks
+```{r ComparisonConsensusOriginal, message = FALSE, warning = FALSE, fig.width = 10, fig.height = 6}
+rm (list = ls())
+load ("Outputs/WGCNA/dissTOM/dissTOMPower8.RData")
+assign("geneTreeOriginal", geneTree)
+rm (dissTOM, geneTree)
+GeneModulesOriginal <- read.csv ("Outputs/WGCNA/MergeModules/All_genes_modules_Power8MinModuleSize20deepSplit0CutHeight0.2.csv")
+
+load ("Outputs/ConsensusWGCNA/dissTOM/dissTOM_Consensus0.4.RData")
+assign("geneTreeConsensus", geneTree)
+rm (dissTOM, geneTree)
+GeneModulesConsenssus <- read.csv ("Outputs/ConsensusWGCNA/MergeModules/All_genes_modules_Consensus0.4.csv")
+
+if (all (GeneModulesOriginal$NAMES == GeneModulesConsenssus$NAMES)) 
+  plotDendroAndColors (geneTreeOriginal, 
+                       cbind (GeneModulesOriginal$mergedColors, GeneModulesConsenssus$mergedColors), 
+                       c ("Non-Consensus", "Consensus"), main = "", dendroLabels=FALSE)
+
+```
+
+### Calculate the connectivity 
+```{r Connectivity, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE}
+rm (list = setdiff (ls (), c ("Data", "GeneModules", "v_BatchMus")))
+
+if (! file.exists ("Outputs/ConsensusWGCNA/GeneConnectivity/Connectivity_Consensus0.4.RData")) {
+  Consensus <- "Consensus0.4"
+  load (paste0 ("Outputs/ConsensusWGCNA/dissTOM/dissTOM_", Consensus, ".RData"))
+  consensusTOM <- 1 - dissTOM
+  rm (dissTOM)
+  filenames <- list.files (recursive = TRUE, path = "Outputs/ConsensusWGCNA", pattern = paste0 (Consensus, ".csv"), full.names = TRUE)
+  # Importing gene-modules table
+  GeneModules <- read.csv (filenames [grepl ("All_genes_modules", filenames)]) %>%
+    mutate (hgnc_symbol = v_BatchMus$genes$hgnc_symbol [match (NAMES, v_BatchMus$genes$ensembl_gene_id)])
+  all (colnames(consensusTOM) == GeneModules$NAMES)
+  COL <- GeneModules$mergedColors
+  # Calculate the connectivity
+  ConnectivityMat <- intramodularConnectivity (consensusTOM, COL)
+  rm (consensusTOM)
+  save (ConnectivityMat, file = paste0 ("Outputs/ConsensusWGCNA/GeneConnectivity/Connectivity_", Consensus, ".RData"))
+}
+
+
+```
+
+#### Hub genes in each module based on the within module connectivity
+```{r HubGens, echo = FALSE, message = FALSE, warning = FALSE, fig.height = 5, fig.width = 5}
+rm (list = setdiff (ls (), c ("Data", "v_BatchMus")))
+if (! file.exists ("Outputs/ConsensusWGCNA/HubGenes/HubGenes_Consensus0.4.RData")) {
+  # Top hub genes based on the kWithin
+  load ("Outputs/ConsensusWGCNA/GeneConnectivity/Connectivity_Consensus0.4.RData")
+  Consensus <- "Consensus0.4"
+
+  filenames <- list.files (recursive = TRUE, path = "Outputs/ConsensusWGCNA", pattern = paste0 (Consensus, ".csv"), full.names = TRUE)
+
+  # Importing gene-modules table
+  GeneModules <- read.csv (filenames [grepl ("All_genes_modules", filenames)]) %>%
+    mutate (hgnc_symbol = v_BatchMus$genes$hgnc_symbol [match (NAMES, v_BatchMus$genes$ensembl_gene_id)])
+
+  # Rename modules (colors to numbers)
+  Module_rename <- data.frame (Module = prob::setdiff (sort (unique (GeneModules$mergedColors)), "grey"), 
+                               Rename = paste ("M", seq.int (length (unique(GeneModules$mergedColors))-1), sep = "."),
+                               stringsAsFactors = FALSE) 
+
+  GeneModules$mergedColors <- Module_rename$Rename [ match (GeneModules$mergedColors, Module_rename$Module) ] 
+  GeneModules$mergedColors [is.na (GeneModules$mergedColors)] = "grey"
+
+  modules <- unique (GeneModules$mergedColors)
+  modules <- modules [modules != "grey"]
+  hubs <- c ()
+	
+  for (m in modules){
+    GENES <- GeneModules %>% filter (mergedColors == m) %>% .$NAMES
+		ConnectivitySub <- ConnectivityMat [rownames (ConnectivityMat) %in% GENES,] %>% 
+		    arrange (- kWithin) 
+		hubsM <- rownames (ConnectivitySub [1:20, ])
+		hubs [[m]] <- hubsM
+  }
+  save (hubs, file = paste0 ("Outputs/ConsensusWGCNA/HubGenes/HubGenes_", Consensus, ".RData"))
+}
+
+```
+
+
+```{r}
+sessionInfo()
+```
+

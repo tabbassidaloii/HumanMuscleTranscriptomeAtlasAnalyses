@@ -1,0 +1,1664 @@
+---
+title: "Myofiber typing analysis in R"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+
+'Note:' The muscle abbreviations were GRA (for Gracilis), SED (semitendinosus distal),  SEM (semitendinosus middle)), GAL (gastrocnemius lateralis), REF (rectus femoris), VAM (vastus medialis) and VAL (vastus lateralis\) in all the analyses (scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots.
+
+```{r setup, include = FALSE}
+rm (list = ls ())
+suppressPackageStartupMessages ({ 
+  library (data.table)
+  library (dplyr)
+  library (ggplot2)
+  library (scales) 
+  library (dplyr)
+  library (plotly)
+  library (knitr)
+  library (cowplot)
+  library (tidyr)
+  library (grid)
+  library (ggpubr)
+  library (rgl)
+  })
+
+knit_hooks$set(webgl = hook_webgl)
+set.seed (1)
+
+setwd("F://Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/MuscleDAtaset/HumanMuscleTranscriptomeAtlasAnalyses/")
+
+# Read all the txt files:
+InputPath = "imageQuantification/input/myofiberTyping/ROI/"
+Files <- list.files (path = InputPath, pattern = ".txt", full.names = T)
+
+DataTable <- lapply (Files, read.table)
+names (DataTable) <- gsub (":.*", "", sapply (DataTable, function (x) x[1, 1]))
+```
+
+Muscles sections of 15 individuals were stained with different MyHC isoforms (MyHC1, MyHC2A and MyHC2X) and laminin. The samples were imaged and image processing and quantification were done in collaboration with Lennard Voortman. 
+Since all the steps including segmentation were done automatically, we need to do some filtration to exclude the non-fiber objects.
+
+# Step1: Seqmentation quality metrics accross all the images
+Laminin channel was used to define 3 segmentation metrics:
+Mean: Laminin intensity inside the fiber/cell (The smaller the better)
+Mean_boundary:Laminin intensity on the boundary (The larger the better)
+StdDev_boundary:Standard deviation of laminin intensity on the boundary (The smaller the better)
+
+```{r Step1.1, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 12, fig.width = 14}
+Filt1 <- rbindlist (DataTable, idcol = TRUE) %>% #importing segmentation quality data
+  filter (Ch == 5) %>%
+  select (.id, Label, Mean, Mean_boundary, StdDev_boundary) %>%
+  unique () %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
+  melt ()
+
+BeforeFiltering <- ggplot (Filt1, aes_string (x = "value")) +
+    geom_density(alpha = .5,) +
+    theme_bw() + ggtitle ("Segmentation metrics: Before filtering") +
+  facet_wrap (variable ~ ., scales='free', nrow = 3) +
+  theme (legend.position = "none", axis.title = element_blank(), 
+         axis.text.x = element_text (size = 12, face = 'bold'), 
+         strip.text = element_text (size = 20))
+
+```
+
+Based on the density distribution for mean and Mean_boundary, we filtered as below:
+
+`Mean`: Included fibers have `Mean < 95th percentile`
+
+`Mean_boundary`: Included fibers have `Mean_boundary > 5th percentile`
+
+But we didn't filtered for StdDev_boundary because filtering for two other metrics improved it.
+
+```{r Step1.2, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 12, fig.width = 8}
+Filt1 <- rbindlist (DataTable, idcol = TRUE) %>% 
+  filter (Ch == 5) %>%
+  select (.id, Label, Mean, Mean_boundary, StdDev_boundary) %>%
+  unique () %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) 
+
+# Percentile base filtering
+Filt1_Mean <- Filt1 %>%
+  filter (quantile (Mean, 0.95) > Mean) 
+Filt1_Mean_boundary <- Filt1 %>%
+  filter (quantile (Mean_boundary, 0.05) < Mean_boundary) 
+
+Filt1_Mean_Mean_boundary <- merge (Filt1_Mean, Filt1_Mean_boundary)
+
+AfterFiltering <- ggplot (Filt1_Mean_Mean_boundary %>% melt (), aes_string(x = "value")) +
+    geom_density(alpha = .5,) +
+    theme_bw() + ggtitle ("Segmentation: After filtering") +
+  facet_wrap (variable ~ ., scales='free', nrow = 3) +
+  theme (legend.position = "none", axis.title = element_blank(), 
+         axis.text.x = element_text (size = 12, face = 'bold'), 
+         strip.text = element_text (size = 20))
+  
+
+plot_grid (BeforeFiltering, AfterFiltering)
+  
+Filt_To_DataTable <- rbindlist (DataTable, idcol = TRUE) %>% 
+  filter (Ch == 5) %>% 
+  mutate (Included_SegQuality = ifelse (Label %in% Filt1_Mean_Mean_boundary$Label, 1, 0)) 
+
+## making output to visualize filtered myofibers in ImageJ
+# STEP = "Step1"
+# dir.create (file.path ("imageQuantification/output/myofiberTyping/", STEP))
+# customFun = function (Filt_To_DataTable) {
+# write.table (Filt_To_DataTable, paste0 ("imageQuantification/output/myofiberTyping/", STEP, "/", unique (Filt_To_DataTable$.id), "_Filt1.txt"), quote = F, sep = "\t", row.names = F)
+# return (Filt_To_DataTable)
+# }
+#  
+# Filt_To_DataTable %>% 
+#  tibble::rownames_to_column(var = " ") %>%
+#  group_by(.id) %>% 
+#  do (customFun (.))
+```
+
+The next filtering step is based on the cross-sectional area. But as we apply a filtering based on the percentile, we would include all the objects (including those that are filtered in the first step)
+
+# Step2: Area for each muscle
+```{r Step2.1, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE, fig.height = 12, fig.width = 14}
+rm (list = setdiff (ls (), c ("DataTable", "Filt_To_DataTable")))
+Filt2 <- rbindlist (DataTable, idcol = TRUE) %>% 
+  filter (Ch == 4) %>%
+  select (.id, Label, Area) %>%
+  unique () %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
+  melt () 
+
+BeforeFiltering <- ggplot (Filt2 %>% filter (value < 30000), aes_string(x = "value")) +
+    geom_density(alpha = .5,) +
+    theme_bw() + ggtitle ("across all individuals and replicates") +
+    facet_wrap (variable ~ Muscle, scales='free', nrow = 2) +
+    theme (legend.position = "none", axis.title = element_blank(), 
+         axis.text.x = element_text (size = 12, face = 'bold'), 
+         strip.text = element_text (size = 20))
+```
+
+The area distribution was different accross the muscles so the filtering based on Area will be done separately for each muscle. The aim here is to exclude small and big non-fiber objects.
+Since there is a right-skewed distribution for all the muscles, we filter more from the left side than the right.
+
+`10th percentile < Area < 99th percentile`
+
+```{r Step2.2, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE, fig.height = 12, fig.width = 14}
+Filt2 <- rbindlist (DataTable, idcol = TRUE) %>% 
+  filter (Ch == 4) %>%
+  select (.id, Label, Area) %>%
+  unique () %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample)))
+
+## Filtering
+for (Muscle in unique (Filt2$Muscle)) {
+  MuscleFibers <- Filt2$Label [Filt2$Muscle == Muscle] 
+  print (Muscle)
+  print (length (MuscleFibers))
+  # Area 
+  Filt2_Area <- Filt2 %>% filter (Label %in% MuscleFibers) %>%
+    filter (quantile (Area, 0.10) < Area &  Area < quantile (Area, 0.99)) 
+  print (summary (Filt2 %>% filter (Label %in% MuscleFibers) %>% .$Area))
+  print (summary (Filt2_Area$Area))
+  assign (paste0 ("Filt2_Area_", Muscle), Filt2_Area)
+}
+Filt2_Area <- rbindlist (lapply (ls (pattern = "Filt2_Area_"), get))
+Filt2_Area_Laminin <- Filt2_Area %>% filter (gsub (":4$", "", Label) %in% gsub (":5$", "", Filt_To_DataTable$Label [Filt_To_DataTable$Included_SegQuality == 1]))
+
+AfterFiltering <- ggplot (Filt2_Area_Laminin %>% melt (), aes_string(x = "value")) +
+  geom_density (alpha = .5,) +
+  theme_bw () + ggtitle ("After filtering") +
+  facet_wrap (variable ~ Muscle, scales = 'free', nrow = 2) +
+  theme (legend.position = "none", axis.title = element_blank(), 
+         axis.text.x = element_text (size = 12, face = 'bold'), 
+         strip.text = element_text (size = 20))
+  
+
+plot_grid (BeforeFiltering, AfterFiltering, nrow = 2)
+  
+Filt_To_DataTable <- Filt_To_DataTable %>% 
+  mutate (Included_Area = ifelse (gsub (":.$", "", Label) %in% gsub (":.$", "", Filt2_Area_Laminin$Label), 1, 0)) 
+
+# STEP = "Step2"
+# dir.create (file.path ("imageQuantification/output/myofiberTyping/", STEP))
+# customFun = function (Filt_To_DataTable) {
+# write.table (Filt_To_DataTable, paste0 ("imageQuantification/output/myofiberTyping/", STEP, "/", unique (Filt_To_DataTable$.id), "_Filt2.txt"), quote = F, sep = "\t", row.names = F)
+# return (Filt_To_DataTable)
+# }
+# 
+# Filt_To_DataTable %>%
+#   tibble::rownames_to_column(var = " ") %>%
+#   group_by(.id) %>%
+#   do (customFun (.))
+```
+
+```{r}
+table (Filt_To_DataTable$Included_SegQuality)
+table (Filt_To_DataTable$Included_SegQuality, Filt_To_DataTable$Included_Area)
+```
+
+We excluded 35,858 objects in the first step and 23,598 in the second step (total = 59456)
+Then we filtered based on circularity so we will also lose the longitudinal fibers
+
+# Step3: Circularity
+```{r Step3.1, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE, fig.height = 6, fig.width = 14}
+rm (list = setdiff (ls (), c ("DataTable", "Filt_To_DataTable")))
+Filt3 <- rbindlist (DataTable, idcol = TRUE) %>% 
+  filter (Ch == 4) %>%
+  select (.id, Label, Circ.) %>%
+  unique () %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
+  melt () 
+
+
+BeforeFiltering <- ggplot (Filt3, aes_string(x = "value")) +
+  geom_density(alpha = .5,) +
+  theme_bw() + ggtitle ("Before filtering") +
+  facet_wrap (variable ~ ., scales='free', nrow = 1) +
+  theme (legend.position = "none", axis.title = element_blank(), 
+         axis.text.x = element_text (size = 12, face = 'bold'), 
+         strip.text = element_text (size = 20))
+```
+
+This filtering is done on all the muscles together since the circularity distribution is the same across all the muscle. 
+`included fibers: Circularity > 1th percentile`
+
+```{r Step3.2, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE, fig.height = 6, fig.width = 8}
+Filt3 <- rbindlist (DataTable, idcol = TRUE) %>% 
+  filter (Ch == 4) %>%
+  select (.id, Label, Circ.) %>%
+  unique () %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample)))
+
+# Circularity
+Filt3_Circularity <- Filt3 %>%
+  filter (quantile (Circ., 0.01) < Circ.) 
+
+Filt3_Circularity_Area_Laminin <- Filt3_Circularity %>% filter (gsub (":.$", "", Label) %in% gsub (":.$", "", Filt_To_DataTable$Label) [Filt_To_DataTable$Included_Area == 1])
+
+AfterFiltering <- ggplot (Filt3_Circularity_Area_Laminin %>% melt (), aes_string(x = "value")) +
+  geom_density (alpha = .5,) +
+  theme_bw () + ggtitle ("After filtering") +
+  facet_wrap (variable ~ ., scales = 'free', nrow = 3) +
+  theme (legend.position = "none", axis.title = element_blank(), 
+         axis.text.x = element_text (size = 12, face = 'bold'), 
+         strip.text = element_text (size = 20))
+  
+
+plot_grid (BeforeFiltering, AfterFiltering)
+  
+Filt_To_DataTable <- Filt_To_DataTable %>% 
+  mutate (Included_Circ = ifelse (gsub (":.$", "", Label) %in% gsub (":.$", "", Filt3_Circularity_Area_Laminin$Label), 1, 0)) %>%
+  mutate (Included_SeqQAreaCirc = ifelse (Included_Circ == 1, 1, 
+                                          ifelse (Included_Area == 1, 0.7, 
+                                                  ifelse (Included_SegQuality == 1, 0.4, 0))))
+
+# STEP = "Step3"
+# dir.create (file.path ("imageQuantification/output/myofiberTyping/", STEP))
+# customFun = function (Filt_To_DataTable) {
+# write.table (Filt_To_DataTable, paste0 ("imageQuantification/output/myofiberTyping/", STEP, "/", unique (Filt_To_DataTable$.id), "_Filt3.txt"), quote = F, sep = "\t", row.names = F)
+# return (Filt_To_DataTable)
+# }
+# 
+# Filt_To_DataTable %>%
+#   tibble::rownames_to_column(var = " ") %>%
+#   group_by(.id) %>%
+#   do (customFun (.))
+
+```
+
+```{r No, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 12, fig.width = 4}
+table(Filt_To_DataTable$Included_SegQuality, Filt_To_DataTable %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>% .$Muscle)
+table(Filt_To_DataTable$Included_Area, Filt_To_DataTable %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>% .$Muscle)
+table(Filt_To_DataTable$Included_Circ, Filt_To_DataTable %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>% .$Muscle)
+
+save (Filt_To_DataTable, file = "imageQuantification/output/myofiberTyping/AllFibers.RData")
+
+```
+
+# Selecting one of the replicates
+```{r StepRepSel, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 8, fig.width = 18}
+FiberData <- rbindlist (DataTable, idcol = TRUE) %>% 
+  filter (Ch %in% c (1, 2, 3)) %>%
+  select (.id, Label, Mean, Ch, Area) %>%
+  unique () %>%
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
+  mutate (fiber = gsub (":.$", "", Label))
+
+FiberData$Ch [FiberData$Ch == 1] = "MyHC1"
+FiberData$Ch [FiberData$Ch == 2] = "MyHC2A"
+FiberData$Ch [FiberData$Ch == 3] = "MyHC2X"
+
+rm (list = setdiff (ls (), c ("DataTable", "Filt_To_DataTable", "FiberData")))
+
+# selection based on the number of remained myofibers after filtering and the image quallity
+Samples <- c ("MD11_GAL_Sam12-Batch1_2020.11.23_s1", "MD11_GRA_SecondTry_Sam74-Batch4_2020.11.26_s1", "MD11_SED_Sam71-Batch4_2020.11.26_s2", "MD11_SEM_Sam91-Batch5_2020.11.27_s2", "MD11_VAL_Sam52-Batch3_2020.11.25_s1",               "MD11_VAM_Sam35-Batch2_2020.11.24_s2", "MD13_GAL_Sam2-Batch1_2020.11.23_s2",               "MD13_GRA_Section3SecondTry_Sam82-Batch5_2020.11.27_s0",               "MD13_REF_Sam37-Batch2_2020.11.24_s1", "MD13_SED_Sam99-Batch5_2020.11.27_s2",               "MD13_SEM_Sam54-Batch3_2020.11.25_s2", "MD13_VAL_Sam25-Batch2_2020.11.24_s1", "MD13_VAM_Sam69-Batch4_2020.11.26_s1", "MD14_GAL_Sam96-Batch5_2020.11.27_s1", "MD14_GRA_Sam1-Batch1_2020.11.23_s2", "MD14_REF_Sam16-Batch1_2020.11.23_s2", "MD14_SED_Sam86-Batch5_2020.11.27_s2", "MD14_SEM_Sam31-Batch2_2020.11.24_s2", "MD14_VAL_Sam46-Batch3_2020.11.25_s1", "MD14_VAM_Sam59-Batch3_2020.11.25_s2", "MD15_GAL_Sam75-Batch4_2020.11.26_s2", "MD15_GRA_Sam13-Batch1_2020.11.23_s2", 
+"MD15_REF_Sam44-Batch3_2020.11.25_s2", "MD15_SED_Sam7-Batch1_2020.11.23_s2", "MD15_SEM_Sam58-Batch3_2020.11.25_s1", "MD15_VAL_Sam90-Batch5_2020.11.27_s1", "MD15_VAM_Sam27-Batch2_2020.11.24_s2", "MD16_GAL_SecondTry_Sam55-Batch3_2020.11.25_s1", "MD16_GRA_Sam41-Batch3_2020.11.25_s2", "MD16_REF_Sam29-Batch2_2020.11.24_s2", "MD16_SED_Sam5-Batch1_2020.11.23_s1", "MD16_SEM_Sam73-Batch4_2020.11.26_s2", "MD16_VAL_Sam19-Batch1_2020.11.23_s1", "MD16_VAM_Sam87-Batch5_2020.11.27_s2", "MD17_GAL_Sam63-Batch4_2020.11.26_s2", "MD17_GRA_Sam88-Batch5_2020.11.27_s1", 
+"MD17_SED_Sam22-Batch2_2020.11.24_s1", "MD17_SEM_Sam39-Batch2_2020.11.24_s2", "MD18_GAL_Sam38-Batch2_2020.11.24_s1", "MD18_GRA_Sam61-Batch4_2020.11.26_s1", "MD18_SED_Sam78-Batch4_2020.11.26_s1", "MD18_SEM_FirstTryDirty!_Sam21-Batch2_2020.11.24_s2", "MD18_VAL_Sam3-Batch1_2020.11.23_s2", "MD18_VAM_Sam50-Batch3_2020.11.25_s2", "MD19_GAL_Sam45-Batch3_2020.11.25_s0", "MD19_GRA_Sam23-Batch2_2020.11.24_s2", "MD19_REF_Sam56-Batch3_2020.11.25_s2", "MD19_SED_Sam32-Batch2_2020.11.24_s1", "MD19_SEM_Sam4-Batch1_2020.11.23_s1", "MD19_VAL_SecondTry_Sam72-Batch4_2020.11.26_s1", "MD19_VAM_Sam93-Batch5_2020.11.27_s1", "MD20_GAL_Sam26-Batch2_2020.11.24_s1", 
+"MD20_GRA_Sam36-Batch2_2020.11.24_s1", "MD20_REF_Sam98-Batch5_2020.11.27_s2", "MD20_SED_Sam49-Batch3_2020.11.25_s1", "MD20_SEM_Sam83-Batch5_2020.11.27_s2", "MD20_VAL_Sam67-Batch4_2020.11.26_s0", "MD20_VAM_Sam11-Batch1_2020.11.23_s2", "MD21_GAL_Sam14-Batch1_2020.11.23_s1", "MD21_GRA_Sam95-Batch5_2020.11.27_s2", "MD21_REF_Sam9-Batch1_2020.11.23_s2", "MD21_SED_Sam34-Batch2_2020.11.24_s1", "MD21_SEM_Sam42-Batch3_2020.11.25_s1", "MD21_VAL_Sam57-Batch3_2020.11.25_s2",
+"MD21_VAM_Sam77-Batch4_2020.11.26_s1", "MD22_GAL_Sam81-Batch5_2020.11.27_s2", "MD22_GRA_Sam68-Batch4_2020.11.26_s2", "MD22_REF_Sam51-Batch3_2020.11.25_s2", "MD22_SED_Sam92-Batch5_2020.11.27_s1", "MD22_SEM_Sam8-Batch1_2020.11.23_s2", 
+"MD22_VAM_FirstTry_Sam24-Batch2_2020.11.24_s1", "MD26_GAL_Sam33-Batch2_2020.11.24_s0",
+"MD26_GRA_Sam53-Batch3_2020.11.25_s2", "MD26_REF_Sam86-Batch5_2020.11.27_s0", "MD26_SED_Sam17-Batch1_2020.11.23_s1", "MD26_SEM_SecondTry_Sam64-Batch4_2020.11.26_s2", "MD26_VAL_Sam94-Batch5_2020.11.27_s1", "MD27_GAL_Sam89-Batch5_2020.11.27_s2", "MD27_GRA_Sam10-Batch1_2020.11.23_s2", "MD27_REF_Sam66-Batch4_2020.11.26_s0", "MD27_SED_Sam43-Batch3_2020.11.25_s1", "MD27_SEM_Sam18-Batch1_2020.11.23_s2", "MD27_VAL_Sam28-Batch2_2020.11.24_s2", "MD28_GAL_Sam48-Batch3_2020.11.25_s2", "MD28_GRA_Sam30-Batch2_2020.11.24_s2", "MD28_REF_Sam79-Batch4_2020.11.26_s1", "MD28_SED_Sam62-Batch4_2020.11.26_s2", "MD28_SEM_Sam97-Batch5_2020.11.27_s2", "MD28_VAM_Sam15-Batch1_2020.11.23_s0", "MD31_GAL_Sam85-Batch5_2020.11.27_s1", "MD31_GRA_Sam40-Batch2_2020.11.24_s2", "MD31_REF_Sam70-Batch4_2020.11.26_s1", "MD31_SED_Sam65-Batch4_2020.11.26_s2", "MD31_SEM_Sam20-Batch1_2020.11.23_s2", "MD31_VAL_Sam76-Batch4_2020.11.26_s1", "MD31_VAM_Sam60-Batch3_2020.11.25_s1")
+
+FiberData <- FiberData %>% 
+  filter (.id %in% Samples) 
+
+FiberData <- tidyr::pivot_wider (FiberData [,c ("fiber", "Individual", "Muscle", "Ch", "Mean", "Area")], names_from = Ch, values_from = Mean) 
+# Dataset after the final filtering for segmentation quality, size and circularity
+FiberDataFilt1_3 <- FiberData %>% 
+  filter (fiber %in% gsub (":.$", "", Filt_To_DataTable$Label)[Filt_To_DataTable$Included_Circ == 1])
+
+ORDER <-  c ("GAL" = 7, "GRA" = 1, "REF" = 4, "SEM" = 2, "SED" = 3, "VAL" = 5, "VAM" = 6)
+
+NoFibers <- merge (FiberData %>%
+                     count (Muscle, Individual) %>%
+                     rename (NoFilter = n), 
+                   FiberDataFilt1_3 %>%
+                     count (Muscle, Individual) %>%
+                     rename (Filt1_3 = n)) %>% 
+  mutate (order = ORDER[match (Muscle, names (ORDER))])
+
+# col.muscle <- c ("GAL" = "#800000", "GRA" = "#4363d8", "REF" = "#f032e6", 
+#                  "SED" = "#ffe119", "SEM" = "#3cb44b", "VAL" = "#e6beff", 
+#                  "VAM" = "#f58231")
+# For paper 
+col.muscle <- c ("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999", 
+                 "SED" = "#0033FF", "SEM" = "#0066FF", "VAL" = "#FF6666", 
+                 "VAM" = "#FF3333")
+
+ggplot (NoFibers, aes (x = Individual, y = Filt1_3/NoFilter, fill = reorder(Muscle, order))) +
+  geom_bar (stat ="identity", position = position_dodge(), alpha = 0.5) +
+  ggtitle ("%remained Fibers after filtering based on\nsegmentation quality, size and circularity") +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () +
+  theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+         axis.title.x = element_blank ()) 
+
+ggplot (NoFibers, aes (x = Individual, y = Filt1_3, fill = reorder (Muscle, order))) +
+  geom_bar (stat ="identity", position = position_dodge(), alpha = 0.5) +
+  ggtitle ("#Fibers per sample") +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () +
+  theme (panel.grid = element_blank (), axis.text.x = element_text (angle = 90), 
+         axis.title.y = element_blank (),
+         axis.title.x = element_blank (), legend.title = element_blank()) +
+  geom_hline (yintercept = 100, linetype = "dashed", color = "black")
+
+ggplot (FiberDataFilt1_3,
+        aes (x = Individual, y = Area, fill = Muscle)) + 
+  geom_boxplot(alpha = 0.5) +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () +
+  ggtitle ("CSAs per sample") +
+  theme (panel.grid = element_blank (), axis.text.x = element_text (angle = 90), 
+         axis.title.y = element_blank (),
+         axis.title.x = element_blank ())
+```
+
+### Scaling and transformation
+```{r StepScaTran, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 12, fig.width = 4}
+## log transformation
+transf = "log"
+excl <- c ("Area", "Muscle", "Individual", "fiber")
+trans_Fun <- function (data, transf = "log") {
+  if (! is.null (transf)) {
+    for (i in 1:ncol (data)) {
+      if (! (colnames (data) [i] %in% excl)) {
+        if (transf == "log") {
+          data [, colnames (data) [i]] <- log (data [, colnames (data) [i]] + 1)
+          }
+      }
+    }
+  }
+  transformed_data <- data 
+  return (transformed_data)
+}
+
+FiberData_transformed <- trans_Fun (FiberData)
+FiberDataFilt1_3_transformed <- trans_Fun (FiberDataFilt1_3)
+
+## Scaling per Image
+scale = TRUE
+if (scale) {
+  FiberData_scale_PImage <- FiberData %>% 
+    group_by(Individual, Muscle) %>%
+    mutate (MyHC2A = scale (MyHC2A, center = FALSE),
+            MyHC2X = scale (MyHC2X, center = FALSE),
+            MyHC1 = scale (MyHC1, center = FALSE))
+  FiberDataFilt1_3_scale_PImage <- FiberDataFilt1_3 %>% 
+    group_by(Individual, Muscle) %>%
+    mutate (MyHC2A = scale (MyHC2A, center = FALSE),
+            MyHC2X = scale (MyHC2X, center = FALSE),
+            MyHC1 = scale (MyHC1, center = FALSE))
+  }
+
+FiberData_scale_PImage_transformed <- trans_Fun (FiberData_scale_PImage)
+FiberDataFilt1_3_scale_PImage_transformed <- trans_Fun (FiberDataFilt1_3_scale_PImage)
+
+boxplot_MFI <- function (data, ch, step = "(Before scaling)") {
+  ggplot (data, aes_string (x = "Individual", y = ch, fill = "Muscle")) + 
+              geom_boxplot () +
+              scale_fill_manual (values = col.muscle) +
+              theme_bw () +
+              ggtitle (paste0 (ch, "\n", step)) +
+              theme (axis.text.x = element_text (size = 12, face = "bold")  ,
+                      axis.text.y = element_text (size = 8, face = "bold"),  axis.title.x = element_blank()) +
+              labs (y = "MFI") 
+}
+
+values_channels <- c ("MyHC1" = "#4363d8", 
+                       "MyHC2A" = "#e6194B" ,
+                       "MyHC2X" = "#3cb44b")
+```
+
+## scatter plots 
+```{r MFIPlot, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 8, fig.width = 4}
+Channels <- c ("MyHC2A", "MyHC2X", "MyHC1")
+### Plot for whole data
+P1 <- ggplot (FiberDataFilt1_3,
+              aes (x = `MyHC1`, y = `MyHC2A`, color = Muscle)) +
+    geom_point (alpha = 0.2) +
+    scale_color_manual (values = col.muscle) +
+    theme_bw () + theme (legend.position = "none")
+P2 <- ggplot (FiberDataFilt1_3,
+              aes (x = `MyHC1`, y = `MyHC2X`, color = Muscle)) +
+    geom_point (alpha = 0.2) +
+    scale_color_manual (values = col.muscle) +
+    theme_bw () + theme (legend.position = "none")
+P3 <- ggplot (FiberDataFilt1_3,
+              aes (x = `MyHC2A`, y = `MyHC2X`, color = Muscle)) +
+    geom_point (alpha = 0.2) +
+    scale_color_manual (values = col.muscle) +
+    theme_bw () + theme (legend.position = "none") 
+
+plot_grid (P1, P2, P3 + rremove("x.text") ,
+            hjust = 0,
+            vjust = 1,
+            align = 'hv', ncol = 1, nrow = 3)
+```
+
+## Raw and normalized measurements (MFI)
+```{r MFIPlot2, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 8, fig.width = 12}
+for (ch in Channels) {
+  print (boxplot_MFI (FiberDataFilt1_4_transformed, ch))
+  print (boxplot_MFI (FiberDataFilt1_4_scale_PImage_transformed, ch, "(After scaling)"))
+}
+# save (FiberData_scale_PImage_transformed, 
+#       file = "imageQuantification/output/myofiberTyping/dataForClustering/FiberData_scale_PImage_transformed.RData")
+# save (FiberDataFilt1_3_scale_PImage_transformed, 
+#       file = "imageQuantification/output/myofiberTyping/dataForClustering/FiberDataFilt1_3_scale_PImage_transformed.RData")
+```
+
+# Meanshift Clustering
+scaled log transformed data is the input for the meanshift clustering
+```{r MS, echo = FALSE, warning = FALSE}
+rm (list = ls())
+# On a cluster testing different h (0.01, 0.2, 0.3 and 0.5)
+Clustering = FALSE
+if (Clustering) {
+  library (LPCM)
+  load ("imageQuantification/output/myofiberTyping/dataForClustering/FiberDataFilt1_3_scale_PImage_transformed.RData")
+  FiberData_scale_PImage_transformed = get (ls()) 
+  MS_FiberFile <- ms (cbind (FiberDataFilt1_3_scale_PImage_transformed [, "MyHC1"],
+                             FiberDataFilt1_3_scale_PImage_transformed [, "MyHC2A"],
+                             FiberDataFilt1_3_scale_PImage_transformed [, "MyHC2X"]), 
+                      h = 0.05, scaled = 0)
+  save (MS_FiberFile, file = "imageQuantification/output/myofiberTyping/clusteringResults/H0.05/MS_MyoFiber_Filt1_3.RData")
+} 
+rm (Clustering)
+# Constructing a data set with the results of different h for different inputs (different filtering) 
+if (!file.exists("imageQuantification/output/myofiberTyping/clusteringResults/ClusteringResultsToPlot.RData")) {
+  if (file.exists("imageQuantification/output/myofiberTyping/clusteringResults/ClusteringResults.RData")) {
+    ## All objects: no filtering
+    load ("imageQuantification/output/myofiberTyping/dataForClustering/FiberData_scale_PImage_transformed.RData")
+    load ("imageQuantification/output/myofiberTyping/clusteringResults/H0.01/MS01_MyoFiber_NoFilterNoScale.RData")
+    all (MS_FiberFile$data[,1] == FiberData_scale_PImage_transformed$MyHC1) # Making the data is correct
+    all (MS_FiberFile$data[,2] == FiberData_scale_PImage_transformed$MyHC2A) # Making the data is correct
+    all (MS_FiberFile$data[,3] == FiberData_scale_PImage_transformed$MyHC2X) # Making the data is correct 
+    FiberData_scale_PImage_transformed$Cluster_H0.01 <- as.character (MS_FiberFile$cluster.label)
+    rm (MS_FiberFile)
+    load ("imageQuantification/output/myofiberTyping/clusteringResults/H0.02/MS02_MyoFiber_NoFilterNoScale.RData")
+    all (MS_FiberFile$data[,1] == FiberData_scale_PImage_transformed$MyHC1)
+    all (MS_FiberFile$data[,2] == FiberData_scale_PImage_transformed$MyHC2A)
+    all (MS_FiberFile$data[,3] == FiberData_scale_PImage_transformed$MyHC2X)
+    FiberData_scale_PImage_transformed$Cluster_H0.02 <- as.character (MS_FiberFile$cluster.label)
+    rm (MS_FiberFile)
+    load ("imageQuantification/output/myofiberTyping/clusteringResults/H0.03/MS03_MyoFiber_NoFilterNoScale.RData")
+    all (MS_FiberFile$data[,1] == FiberData_scale_PImage_transformed$MyHC1)
+    all (MS_FiberFile$data[,2] == FiberData_scale_PImage_transformed$MyHC2A)
+    all (MS_FiberFile$data[,3] == FiberData_scale_PImage_transformed$MyHC2X)
+    FiberData_scale_PImage_transformed$Cluster_H0.03 <- as.character (MS_FiberFile$cluster.label)
+    rm (MS_FiberFile)
+    load ("imageQuantification/output/myofiberTyping/clusteringResults/H0.05/MS_MyoFiber_NoFilterNoScale.RData")
+    all (MS_FiberFile$data[,1] == FiberData_scale_PImage_transformed$MyHC1)
+    all (MS_FiberFile$data[,2] == FiberData_scale_PImage_transformed$MyHC2A)
+    all (MS_FiberFile$data[,3] == FiberData_scale_PImage_transformed$MyHC2X)
+    FiberData_scale_PImage_transformed$Cluster_H0.05 <- as.character (MS_FiberFile$cluster.label)
+    rm (MS_FiberFile)
+
+    ## Filt1_3
+    load ("imageQuantification/output/myofiberTyping/dataForClustering/FiberDataFilt1_3_scale_PImage_transformed.RData")
+    load ("imageQuantification/output/myofiberTyping/clusteringResults/H0.01/MS01_MyoFiber_Filt1_3_NoScale.RData")
+    all (MS_FiberFile$data[,1] == FiberDataFilt1_3_scale_PImage_transformed$MyHC1)
+    all (MS_FiberFile$data[,2] == FiberDataFilt1_3_scale_PImage_transformed$MyHC2A)
+    all (MS_FiberFile$data[,3] == FiberDataFilt1_3_scale_PImage_transformed$MyHC2X)
+    FiberDataFilt1_3_scale_PImage_transformed$Cluster_H0.01 <- as.character (MS_FiberFile$cluster.label)
+    rm (MS_FiberFile)
+    load ("imageQuantification/output/myofiberTyping/clusteringResults/H0.02/MS02_MyoFiber_Filt1_3_NoScale.RData")
+    all (MS_FiberFile$data[,1] == FiberDataFilt1_3_scale_PImage_transformed$MyHC1)
+    all (MS_FiberFile$data[,2] == FiberDataFilt1_3_scale_PImage_transformed$MyHC2A)
+    all (MS_FiberFile$data[,3] == FiberDataFilt1_3_scale_PImage_transformed$MyHC2X)
+    FiberDataFilt1_3_scale_PImage_transformed$Cluster_H0.02 <- as.character (MS_FiberFile$cluster.label)
+    rm (MS_FiberFile)
+    load ("imageQuantification/output/myofiberTyping/clusteringResults/H0.03/MS03_MyoFiber_Filt1_3_NoScale.RData")
+    all (MS_FiberFile$data[,1] == FiberDataFilt1_3_scale_PImage_transformed$MyHC1)
+    all (MS_FiberFile$data[,2] == FiberDataFilt1_3_scale_PImage_transformed$MyHC2A)
+    all (MS_FiberFile$data[,3] == FiberDataFilt1_3_scale_PImage_transformed$MyHC2X)
+    FiberDataFilt1_3_scale_PImage_transformed$Cluster_H0.03 <- as.character (MS_FiberFile$cluster.label)
+    rm (MS_FiberFile)
+    load ("imageQuantification/output/myofiberTyping/clusteringResults/H0.05/MS_MyoFiber_Filt1_3_NoScale.RData")
+    all (MS_FiberFile$data[,1] == FiberDataFilt1_3_scale_PImage_transformed$MyHC1)
+    all (MS_FiberFile$data[,2] == FiberDataFilt1_3_scale_PImage_transformed$MyHC2A)
+    all (MS_FiberFile$data[,3] == FiberDataFilt1_3_scale_PImage_transformed$MyHC2X)
+    FiberDataFilt1_3_scale_PImage_transformed$Cluster_H0.05 <- as.character (MS_FiberFile$cluster.label)
+    rm (MS_FiberFile)
+
+    
+
+    save (list = ls(), file = "imageQuantification/output/myofiberTyping/clusteringResults/ClusteringResults.RData")
+      # load (file = "imageQuantification/output/myofiberTyping/clusteringResults/ClusteringResults.RData")
+      # removing the small clusters
+      FiberData_scale_PImage_transformed <- as.data.frame (FiberData_scale_PImage_transformed)
+      for (cluster in c ("Cluster_H0.01", "Cluster_H0.02", "Cluster_H0.03", "Cluster_H0.05")) {
+        KeepClust <- names (table(FiberData_scale_PImage_transformed [cluster]))[table(FiberData_scale_PImage_transformed[cluster])/nrow (FiberData_scale_PImage_transformed) > 0.01]
+        FiberData_scale_PImage_transformed [, cluster] <- ifelse (FiberData_scale_PImage_transformed [, cluster] %in% KeepClust,
+                                                                  FiberData_scale_PImage_transformed [, cluster], NA)
+        rm (KeepClust, cluster) }
+      
+      FiberDataFilt1_3_scale_PImage_transformed <- as.data.frame (FiberDataFilt1_3_scale_PImage_transformed)
+      for (cluster in c ("Cluster_H0.01", "Cluster_H0.02", "Cluster_H0.03", "Cluster_H0.05")) {
+        KeepClust <- names (table(FiberDataFilt1_3_scale_PImage_transformed[cluster]))[table(FiberDataFilt1_3_scale_PImage_transformed[cluster])/nrow(FiberDataFilt1_3_scale_PImage_transformed) > 0.01]
+        FiberDataFilt1_3_scale_PImage_transformed [, cluster] <- ifelse (FiberDataFilt1_3_scale_PImage_transformed [, cluster] %in% KeepClust,
+                                                                         FiberDataFilt1_3_scale_PImage_transformed [, cluster], NA)
+        rm (KeepClust, cluster)}
+
+      save (list = ls(), file = "imageQuantification/output/myofiberTyping/clusteringResults/ClusteringResultsToPlot.RData") } } else { load ("imageQuantification/output/myofiberTyping/clusteringResults/ClusteringResultsToPlot.RData")
+}
+
+## Plotting the clusters
+# pdf ("imageQuantification/output/myofiberTyping/clusteringResults/ClusteringPlots.pdf", width = 20, height = 15)
+
+# PLot to select the best widthband
+if (FALSE) { # This part should be run to find which widthband fit better to your data
+  for (f in ls ()){
+    pdf (paste0 ("imageQuantification/output/myofiberTyping/clusteringResults/ClusteringPlots", f, ".pdf"), width = 20, height = 15)
+    file = get (f)
+    P1 <- ggplot (file, aes (x = `MyHC1`, y = `MyHC2A`, color = as.factor(Cluster_H0.01))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none")
+    P2 <- ggplot (file, aes (x = `MyHC1`, y = `MyHC2X`, color = as.factor(Cluster_H0.01))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none")
+    P3 <- ggplot (file, aes (x = `MyHC2A`, y = `MyHC2X`, color = as.factor(Cluster_H0.01))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none") 
+    P4 <- ggplot (file, aes (x = `MyHC1`, y = `MyHC2A`, color = as.factor(Cluster_H0.02))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none")
+    P5 <- ggplot (file, aes (x = `MyHC1`, y = `MyHC2X`, color = as.factor(Cluster_H0.02))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none")
+    P6 <- ggplot (file, aes (x = `MyHC2A`, y = `MyHC2X`, color = as.factor(Cluster_H0.02))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none") 
+    P7 <- ggplot (file, aes (x = `MyHC1`, y = `MyHC2A`, color = as.factor(Cluster_H0.03))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none")
+    P8 <- ggplot (file, aes (x = `MyHC1`, y = `MyHC2X`, color = as.factor(Cluster_H0.03))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none")
+    P9 <- ggplot (file, aes (x = `MyHC2A`, y = `MyHC2X`, color = as.factor(Cluster_H0.03))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none") 
+    P10 <- ggplot (file, aes (x = `MyHC1`, y = `MyHC2A`, color = as.factor(Cluster_H0.05))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none")
+    P11 <- ggplot (file, aes (x = `MyHC1`, y = `MyHC2X`, color = as.factor(Cluster_H0.05))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none")
+    P12 <- ggplot (file, aes (x = `MyHC2A`, y = `MyHC2X`, color = as.factor(Cluster_H0.05))) +
+      geom_point (alpha = 0.2) + theme_bw () + theme (legend.position = "none") 
+    print (plot_grid (P1, P4, P7, P10, P2, P5, P8, P11, P3, P6, P9, P12 + rremove ("x.text"), 
+                      hjust = 0, vjust = 1, align = 'hv', ncol = 4, nrow = 3, 
+                      labels = c ("0.01", "0.02", "0.03", "0.05")))
+    dev.off()
+  }
+}
+
+
+# The best h is 0.02
+# The final table
+if (TRUE) {
+  rm (list = ls()) 
+  load ("imageQuantification/output/myofiberTyping/clusteringResults/ClusteringResultsToPlot.RData")
+  load ("imageQuantification/output/myofiberTyping/AllFibers.RData")
+  Samples <- c ("MD11_GAL_Sam12-Batch1_2020.11.23_s1", "MD11_GRA_SecondTry_Sam74-Batch4_2020.11.26_s1", "MD11_SED_Sam71-Batch4_2020.11.26_s2", "MD11_SEM_Sam91-Batch5_2020.11.27_s2", "MD11_VAL_Sam52-Batch3_2020.11.25_s1", "MD11_VAM_Sam35-Batch2_2020.11.24_s2", "MD13_GAL_Sam2-Batch1_2020.11.23_s2", "MD13_GRA_Section3SecondTry_Sam82-Batch5_2020.11.27_s0", "MD13_REF_Sam37-Batch2_2020.11.24_s1", "MD13_SED_Sam99-Batch5_2020.11.27_s2", "MD13_SEM_Sam54-Batch3_2020.11.25_s2", "MD13_VAL_Sam25-Batch2_2020.11.24_s1", "MD13_VAM_Sam69-Batch4_2020.11.26_s1", "MD14_GAL_Sam96-Batch5_2020.11.27_s1", "MD14_GRA_Sam1-Batch1_2020.11.23_s2", "MD14_REF_Sam16-Batch1_2020.11.23_s2", "MD14_SED_Sam86-Batch5_2020.11.27_s2", "MD14_SEM_Sam31-Batch2_2020.11.24_s2", "MD14_VAL_Sam46-Batch3_2020.11.25_s1", "MD14_VAM_Sam59-Batch3_2020.11.25_s2", "MD15_GAL_Sam75-Batch4_2020.11.26_s2", "MD15_GRA_Sam13-Batch1_2020.11.23_s2", "MD15_REF_Sam44-Batch3_2020.11.25_s2", "MD15_SED_Sam7-Batch1_2020.11.23_s2", "MD15_SEM_Sam58-Batch3_2020.11.25_s1", "MD15_VAL_Sam90-Batch5_2020.11.27_s1", "MD15_VAM_Sam27-Batch2_2020.11.24_s2", "MD16_GAL_SecondTry_Sam55-Batch3_2020.11.25_s1", "MD16_GRA_Sam41-Batch3_2020.11.25_s2", "MD16_REF_Sam29-Batch2_2020.11.24_s2", "MD16_SED_Sam5-Batch1_2020.11.23_s1", "MD16_SEM_Sam73-Batch4_2020.11.26_s2", "MD16_VAL_Sam19-Batch1_2020.11.23_s1", "MD16_VAM_Sam87-Batch5_2020.11.27_s2", "MD17_GAL_Sam63-Batch4_2020.11.26_s2", "MD17_GRA_Sam88-Batch5_2020.11.27_s1", "MD17_SED_Sam22-Batch2_2020.11.24_s1", "MD17_SEM_Sam39-Batch2_2020.11.24_s2", "MD18_GAL_Sam38-Batch2_2020.11.24_s1", "MD18_GRA_Sam61-Batch4_2020.11.26_s1", "MD18_SED_Sam78-Batch4_2020.11.26_s1", "MD18_SEM_FirstTryDirty!_Sam21-Batch2_2020.11.24_s2", "MD18_VAL_Sam3-Batch1_2020.11.23_s2", "MD18_VAM_Sam50-Batch3_2020.11.25_s2", "MD19_GAL_Sam45-Batch3_2020.11.25_s0", "MD19_GRA_Sam23-Batch2_2020.11.24_s2", "MD19_REF_Sam56-Batch3_2020.11.25_s2", "MD19_SED_Sam32-Batch2_2020.11.24_s1", "MD19_SEM_Sam4-Batch1_2020.11.23_s1", "MD19_VAL_SecondTry_Sam72-Batch4_2020.11.26_s1", "MD19_VAM_Sam93-Batch5_2020.11.27_s1", "MD20_GAL_Sam26-Batch2_2020.11.24_s1",  "MD20_GRA_Sam36-Batch2_2020.11.24_s1", "MD20_REF_Sam98-Batch5_2020.11.27_s2", "MD20_SED_Sam49-Batch3_2020.11.25_s1", "MD20_SEM_Sam83-Batch5_2020.11.27_s2", "MD20_VAL_Sam67-Batch4_2020.11.26_s0", "MD20_VAM_Sam11-Batch1_2020.11.23_s2", "MD21_GAL_Sam14-Batch1_2020.11.23_s1", "MD21_GRA_Sam95-Batch5_2020.11.27_s2", "MD21_REF_Sam9-Batch1_2020.11.23_s2", "MD21_SED_Sam34-Batch2_2020.11.24_s1", "MD21_SEM_Sam42-Batch3_2020.11.25_s1", "MD21_VAL_Sam57-Batch3_2020.11.25_s2", "MD21_VAM_Sam77-Batch4_2020.11.26_s1", "MD22_GAL_Sam81-Batch5_2020.11.27_s2", "MD22_GRA_Sam68-Batch4_2020.11.26_s2", "MD22_REF_Sam51-Batch3_2020.11.25_s2", "MD22_SED_Sam92-Batch5_2020.11.27_s1", "MD22_SEM_Sam8-Batch1_2020.11.23_s2", "MD22_VAM_FirstTry_Sam24-Batch2_2020.11.24_s1", "MD26_GAL_Sam33-Batch2_2020.11.24_s0", "MD26_GRA_Sam53-Batch3_2020.11.25_s2", "MD26_REF_Sam86-Batch5_2020.11.27_s0", "MD26_SED_Sam17-Batch1_2020.11.23_s1", "MD26_SEM_SecondTry_Sam64-Batch4_2020.11.26_s2", "MD26_VAL_Sam94-Batch5_2020.11.27_s1", "MD27_GAL_Sam89-Batch5_2020.11.27_s2", "MD27_GRA_Sam10-Batch1_2020.11.23_s2", "MD27_REF_Sam66-Batch4_2020.11.26_s0", "MD27_SED_Sam43-Batch3_2020.11.25_s1", "MD27_SEM_Sam18-Batch1_2020.11.23_s2", "MD27_VAL_Sam28-Batch2_2020.11.24_s2", "MD28_GAL_Sam48-Batch3_2020.11.25_s2", "MD28_GRA_Sam30-Batch2_2020.11.24_s2", "MD28_REF_Sam79-Batch4_2020.11.26_s1", "MD28_SED_Sam62-Batch4_2020.11.26_s2", "MD28_SEM_Sam97-Batch5_2020.11.27_s2", "MD28_VAM_Sam15-Batch1_2020.11.23_s0", "MD31_GAL_Sam85-Batch5_2020.11.27_s1", "MD31_GRA_Sam40-Batch2_2020.11.24_s2", "MD31_REF_Sam70-Batch4_2020.11.26_s1", "MD31_SED_Sam65-Batch4_2020.11.26_s2", "MD31_SEM_Sam20-Batch1_2020.11.23_s2", "MD31_VAL_Sam76-Batch4_2020.11.26_s1", "MD31_VAM_Sam60-Batch3_2020.11.25_s1") 
+  Filt_To_DataTable <- Filt_To_DataTable %>% 
+    filter (.id %in% Samples)
+
+  FiltClust_To_DataTable <- Filt_To_DataTable %>% 
+    mutate (fiber = gsub (":.$", "", Label)) %>%
+    mutate (MyHC1_all = FiberData_scale_PImage_transformed$MyHC1 [match (fiber, FiberData_scale_PImage_transformed$fiber)]) %>%
+    mutate (MyHC2A_all = FiberData_scale_PImage_transformed$MyHC2A [match (fiber, FiberData_scale_PImage_transformed$fiber)]) %>%
+    mutate (MyHC2X_all = FiberData_scale_PImage_transformed$MyHC2X [match (fiber, FiberData_scale_PImage_transformed$fiber)]) %>%
+    mutate (MyHC1_Filt1_3 = FiberDataFilt1_3_scale_PImage_transformed$MyHC1 [match (fiber, FiberDataFilt1_3_scale_PImage_transformed$fiber)]) %>%
+    mutate (MyHC2A_Filt1_3 = FiberDataFilt1_3_scale_PImage_transformed$MyHC2A [match (fiber, FiberDataFilt1_3_scale_PImage_transformed$fiber)]) %>%
+    mutate (MyHC2X_Filt1_3 = FiberDataFilt1_3_scale_PImage_transformed$MyHC2X [match (fiber, FiberDataFilt1_3_scale_PImage_transformed$fiber)]) %>%
+    mutate (NoFiltH01 = as.numeric (as.factor (FiberData_scale_PImage_transformed$Cluster_H0.01 [match (fiber, FiberData_scale_PImage_transformed$fiber)]))) %>%
+    mutate (NoFiltH02 = as.numeric (as.factor (FiberData_scale_PImage_transformed$Cluster_H0.02 [match (fiber, FiberData_scale_PImage_transformed$fiber)]))) %>%
+    mutate (NoFiltH03 = as.numeric (as.factor (FiberData_scale_PImage_transformed$Cluster_H0.03 [match (fiber, FiberData_scale_PImage_transformed$fiber)]))) %>%
+    mutate (NoFiltH05 = as.numeric (as.factor (FiberData_scale_PImage_transformed$Cluster_H0.05 [match (fiber, FiberData_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_3H01 = as.numeric (as.factor (FiberDataFilt1_3_scale_PImage_transformed$Cluster_H0.01 [match (fiber, FiberDataFilt1_3_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_3H02 = as.numeric (as.factor (FiberDataFilt1_3_scale_PImage_transformed$Cluster_H0.02 [match (fiber, FiberDataFilt1_3_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_3H03 = as.numeric (as.factor (FiberDataFilt1_3_scale_PImage_transformed$Cluster_H0.03 [match (fiber, FiberDataFilt1_3_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_3H05 = as.numeric (as.factor (FiberDataFilt1_3_scale_PImage_transformed$Cluster_H0.05 [match (fiber, FiberDataFilt1_3_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_4H01 = as.numeric (as.factor (FiberDataFilt1_4_scale_PImage_transformed$Cluster_H0.01 [match (fiber, FiberDataFilt1_4_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_4H02 = as.numeric (as.factor (FiberDataFilt1_4_scale_PImage_transformed$Cluster_H0.02 [match (fiber, FiberDataFilt1_4_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_4H03 = as.numeric (as.factor (FiberDataFilt1_4_scale_PImage_transformed$Cluster_H0.03 [match (fiber, FiberDataFilt1_4_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_4H05 = as.numeric (as.factor (FiberDataFilt1_4_scale_PImage_transformed$Cluster_H0.05 [match (fiber, FiberDataFilt1_4_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_4_disH01 = as.numeric (as.factor (FiberDataFilt1_4_dis_scale_PImage_transformed$Cluster_H0.01 [match (fiber, FiberDataFilt1_4_dis_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_4_disH02 = as.numeric (as.factor (FiberDataFilt1_4_dis_scale_PImage_transformed$Cluster_H0.02 [match (fiber, FiberDataFilt1_4_dis_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_4_disH03 = as.numeric (as.factor (FiberDataFilt1_4_dis_scale_PImage_transformed$Cluster_H0.03 [match (fiber, FiberDataFilt1_4_dis_scale_PImage_transformed$fiber)]))) %>%
+    mutate (Filt1_4_disH05 = as.numeric (as.factor (FiberDataFilt1_4_dis_scale_PImage_transformed$Cluster_H0.05 [match (fiber, FiberDataFilt1_4_dis_scale_PImage_transformed$fiber)])))
+  
+# customFun = function (FiltClust_To_DataTable) {
+# write.table (FiltClust_To_DataTable, paste0 ("imageQuantification/output/myofiberTyping/clusteringResults/FibersInClusters/", unique (FiltClust_To_DataTable$.id), "_FibersInClusters.txt"), quote = F, sep = "\t", row.names = F)
+# return (FiltClust_To_DataTable)
+# }
+# 
+# FiltClust_To_DataTable %>%
+#   tibble::rownames_to_column(var = " ") %>%
+#   group_by(.id) %>%
+#   do (customFun (.))
+}
+```
+
+```{r MSPlots1, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 4, fig.width = 4}
+# We decided to go for h = 0.02
+rm (list = setdiff (ls() , c("FiltClust_To_DataTable")))
+load ("imageQuantification/output/myofiberTyping/clusteringResults/ClusteringResultsToPlot.RData")
+# Filt1_3
+FiltClust_To_DataTable$Filt1_3H02 <- ifelse (FiltClust_To_DataTable$Included_Circ == 1, FiltClust_To_DataTable$Filt1_3H02, "Filtered")
+FiltClust_To_DataTable$Filt1_3H02 [is.na (FiltClust_To_DataTable$Filt1_3H02)] = "OtherCluters"
+# Filt1_4
+FiltClust_To_DataTable$Filt1_4H02 <- ifelse (FiltClust_To_DataTable$Included_MFI == 1, FiltClust_To_DataTable$Filt1_4H02, "Filtered")
+FiltClust_To_DataTable$Filt1_4H02 [is.na (FiltClust_To_DataTable$Filt1_4H02)] = "OtherCluters"
+# Filt1_4_dis
+FiltClust_To_DataTable$Filt1_4_disH02 <- ifelse (FiltClust_To_DataTable$Included_MFI_Distance == 1, FiltClust_To_DataTable$Filt1_4_disH02, "Filtered")
+FiltClust_To_DataTable$Filt1_4_disH02 [is.na (FiltClust_To_DataTable$Filt1_4_disH02)] = "OtherCluters"
+# NoFilter
+FiltClust_To_DataTable$NoFiltH02 [is.na (FiltClust_To_DataTable$NoFiltH02)] = "OtherCluters"
+
+FiltClust_To_DataTable <- FiltClust_To_DataTable %>% 
+  mutate (Sample = gsub ("-.*", "", .id)) %>%
+  mutate (Replicate = gsub (".*_", "", .id)) %>%
+  mutate (Individual = gsub ("_.*", "", .id)) %>%
+  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample)))
+
+## Renaming the clusters based MFI for different isoforms
+col.cluster <- c ("MyHC1" = "blue", "MyHC2A" = "red", "MyHC2X" = "green", 
+                 "Filtered" = "grey95", "OtherCluters" = "grey", "NoneFiber" = "yellow")
+
+ggplot (FiltClust_To_DataTable %>% dplyr::select(fiber, Individual, Muscle, Filt1_4_disH02, MyHC1_Filt1_4_dis, MyHC2A_Filt1_4_dis, MyHC2X_Filt1_4_dis) %>% gather (key = Isoform, value = Value, MyHC1_Filt1_4_dis, MyHC2A_Filt1_4_dis, MyHC2X_Filt1_4_dis) %>% na.omit () %>% mutate (Isoform = gsub ("_.*", "", Isoform)), 
+        aes (x = Filt1_4_disH02, y = Value, fill = Isoform)) +
+  geom_boxplot () + scale_fill_manual (values = col.cluster) + ggtitle ("Filt1_4_dis") +
+  theme_bw () + theme (axis.title.x = element_blank()) + labs (y = "scaled transformed MFI")
+
+FiltClust_To_DataTable$Filt1_4_disH02 <- ifelse (FiltClust_To_DataTable$Filt1_4_disH02 == 1, "MyHC2A",                                   ifelse (FiltClust_To_DataTable$Filt1_4_disH02 == 3, "MyHC1",
+                                   ifelse (FiltClust_To_DataTable$Filt1_4_disH02 == 4, "MyHC2X", 
+                                   ifelse (FiltClust_To_DataTable$Filt1_4_disH02 == 2,
+                                           "NoneFiber", FiltClust_To_DataTable$Filt1_4_disH02))))
+
+
+# P1 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC1_Filt1_4_dis, y = MyHC2A_Filt1_4_dis, color = as.factor(Filt1_4_disH02))) +
+#     geom_point (alpha = 0.01) + scale_color_manual (values = col.cluster) +
+#   theme_bw () + theme (legend.position = "none") 
+# P2 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC1_Filt1_4_dis, y = MyHC2X_Filt1_4_dis, color = as.factor(Filt1_4_disH02))) +
+#     geom_point (alpha = 0.01) + scale_color_manual (values = col.cluster) +
+#     theme_bw () + theme (legend.position = "none") 
+# P3 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC2A_Filt1_4_dis, y = MyHC2X_Filt1_4_dis, color = as.factor(Filt1_4_disH02))) +
+#     geom_point (alpha = 0.01) + scale_color_manual (values = col.cluster) +
+#     theme_bw () + theme (legend.position = "none") 
+# plot_grid (P1, P2, P3 + rremove("x.text") ,
+#            hjust = 0,
+#            vjust = 1, ncol = 1)
+# gridExtra::grid.arrange(P1, P2, P3 + rremove("x.text"), 
+#           ncol = 1)
+
+P1 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC1_Filt1_4_dis", y = "MyHC2A_Filt1_4_dis",
+  color = "Filt1_4_disH02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "Filt1_4_disH02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+P2 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC1_Filt1_4_dis", y = "MyHC2X_Filt1_4_dis",
+  color = "Filt1_4_disH02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "Filt1_4_disH02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+P3 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC2A_Filt1_4_dis", y = "MyHC2X_Filt1_4_dis",
+  color = "Filt1_4_disH02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "Filt1_4_disH02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+
+# Filt1_4H02 <- merge (FiltClust_To_DataTable %>%
+#   group_by (Filt1_4H02) %>%
+#   # count () %>%
+#   summarize (MedianMyHC1 = median (MyHC1_Filt1_4),
+#              MedianMyHC2A = median (MyHC2A_Filt1_4),
+#              MedianMyHC2X = median (MyHC2X_Filt1_4)), FiltClust_To_DataTable %>%
+#   group_by (Filt1_4H02) %>%
+#   count ())
+ggplot (FiltClust_To_DataTable %>% dplyr::select(fiber, Individual, Muscle, Filt1_4H02, MyHC1_Filt1_4, MyHC2A_Filt1_4, MyHC2X_Filt1_4) %>% gather (key = Isoform, value = Value, MyHC1_Filt1_4, MyHC2A_Filt1_4, MyHC2X_Filt1_4) %>% na.omit () %>% mutate (Isoform = gsub ("_.*", "", Isoform)), 
+        aes (x = Filt1_4H02, y = Value, fill = Isoform)) +
+  geom_boxplot () + scale_fill_manual (values = col.cluster) + ggtitle ("Filt1_4") +
+  theme_bw () + theme (axis.title.x = element_blank()) + labs (y = "scaled transformed MFI")
+
+FiltClust_To_DataTable$Filt1_4H02 <- ifelse (FiltClust_To_DataTable$Filt1_4H02 == 1, "MyHC2A",
+                               ifelse (FiltClust_To_DataTable$Filt1_4H02 == 2, "MyHC1",
+                               ifelse (FiltClust_To_DataTable$Filt1_4H02 == 3, "MyHC2X", 
+                               ifelse (FiltClust_To_DataTable$Filt1_4H02 == 4,
+                                       "NoneFiber", FiltClust_To_DataTable$Filt1_4H02))))
+
+# P1 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC1_Filt1_4, y = MyHC2A_Filt1_4, color = as.factor(Filt1_4H02))) +
+#     geom_point (alpha = 0.2) + scale_color_manual (values = col.cluster) + 
+#   theme_bw () + theme (legend.position = "none") 
+# P2 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC1_Filt1_4, y = MyHC2X_Filt1_4, color = as.factor(Filt1_4H02))) +
+#     geom_point (alpha = 0.2) + scale_color_manual (values = col.cluster) +
+#     theme_bw () + theme (legend.position = "none") 
+# P3 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC2A_Filt1_4, y = MyHC2X_Filt1_4, color = as.factor(Filt1_4H02))) +
+#     geom_point (alpha = 0.2) + scale_color_manual (values = col.cluster) +
+#     theme_bw () + theme (legend.position = "none") 
+# plot_grid (P1, P2, P3 + rremove("x.text") ,
+#            hjust = 0,
+#            vjust = 1, ncol = 1)
+
+
+P1 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC1_Filt1_4", y = "MyHC2A_Filt1_4",
+  color = "Filt1_4H02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "Filt1_4H02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+P2 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC1_Filt1_4", y = "MyHC2X_Filt1_4",
+  color = "Filt1_4H02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "Filt1_4H02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+P3 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC2A_Filt1_4", y = "MyHC2X_Filt1_4",
+  color = "Filt1_4H02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "Filt1_4H02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+
+# Filt1_3H02 <- merge (FiltClust_To_DataTable %>%
+#   group_by (Filt1_3H02) %>%
+#   # count () %>%
+#   summarize (MedianMyHC1 = median (MyHC1_Filt1_3),
+#              MedianMyHC2A = median (MyHC2A_Filt1_3),
+#              MedianMyHC2X = median (MyHC2X_Filt1_3)), FiltClust_To_DataTable %>%
+#   group_by (Filt1_3H02) %>%
+#   count ())
+
+ggplot (FiltClust_To_DataTable %>% dplyr::select(fiber, Individual, Muscle, Filt1_3H02, MyHC1_Filt1_3, MyHC2A_Filt1_3, MyHC2X_Filt1_3) %>% gather (key = Isoform, value = Value, MyHC1_Filt1_3, MyHC2A_Filt1_3, MyHC2X_Filt1_3) %>% na.omit () %>% mutate (Isoform = gsub ("_.*", "", Isoform)), 
+        aes (x = Filt1_3H02, y = Value, fill = Isoform)) +
+  geom_boxplot () + scale_fill_manual (values = col.cluster) + ggtitle ("Filt1_3") +
+  theme_bw () + theme (axis.title.x = element_blank()) + labs (y = "scaled transformed MFI")
+
+ToTable <- FiltClust_To_DataTable %>% dplyr::select(fiber, Individual, Muscle, Filt1_3H02, MyHC1_Filt1_3, MyHC2A_Filt1_3, MyHC2X_Filt1_3) %>%
+  gather (key = Isoform, value = Value, MyHC1_Filt1_3, MyHC2A_Filt1_3, MyHC2X_Filt1_3) %>% na.omit () %>%
+  mutate (Isoform = gsub ("_.*", "", Isoform)) %>% group_by(Filt1_3H02, Isoform) %>% 
+  summarise(MFI_mean = mean(Value), MFI_median = median(Value), NoFibers = n())
+round (100*unique(ToTable$NoFibers)/sum(unique(ToTable$NoFibers)), digits = 2)
+
+FiltClust_To_DataTable$Filt1_3H02 <- ifelse (FiltClust_To_DataTable$Filt1_3H02 == 1, "MyHC2A",
+                               ifelse (FiltClust_To_DataTable$Filt1_3H02 == 2, "MyHC1",
+                               ifelse (FiltClust_To_DataTable$Filt1_3H02 == 4, "MyHC2X", 
+                               ifelse (FiltClust_To_DataTable$Filt1_3H02 == 3,
+                                       "NoneFiber", FiltClust_To_DataTable$Filt1_3H02))))
+
+# P1 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC1_Filt1_3, y = MyHC2A_Filt1_3, color = as.factor(Filt1_3H02))) +
+#     geom_point (alpha = 0.2) + scale_color_manual (values = col.cluster) +
+#   theme_bw () + theme (legend.position = "none") 
+# P2 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC1_Filt1_3, y = MyHC2X_Filt1_3, color = as.factor(Filt1_3H02))) +
+#     geom_point (alpha = 0.2) + scale_color_manual (values = col.cluster) +
+#     theme_bw ()+ theme (legend.position = "none") 
+# P3 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC2A_Filt1_3, y = MyHC2X_Filt1_3, color = as.factor(Filt1_3H02))) +
+#     geom_point (alpha = 0.2) + scale_color_manual (values = col.cluster) +
+#     theme_bw ()+ theme (legend.position = "none") 
+# plot_grid (P1, P2, P3 + rremove("x.text") ,
+#            hjust = 0,
+#            vjust = 1, ncol = 1)
+
+P1 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC1_Filt1_3", y = "MyHC2A_Filt1_3",
+  color = "Filt1_3H02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "Filt1_3H02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+P2 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC1_Filt1_3", y = "MyHC2X_Filt1_3",
+  color = "Filt1_3H02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "Filt1_3H02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+P3 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC2A_Filt1_3", y = "MyHC2X_Filt1_3",
+  color = "Filt1_3H02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "Filt1_3H02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+
+
+# NoFiltH02 <- merge (FiltClust_To_DataTable %>%
+#   group_by (NoFiltH02) %>%
+#   # count () %>%
+#   summarize (MedianMyHC1 = median (MyHC1_all),
+#              MedianMyHC2A = median (MyHC2A_all),
+#              MedianMyHC2X = median (MyHC2X_all)), FiltClust_To_DataTable %>%
+#   group_by (NoFiltH02) %>%
+#   count ())
+
+ggplot (FiltClust_To_DataTable %>% dplyr::select(fiber, Individual, Muscle, NoFiltH02, MyHC1_all, MyHC2A_all, MyHC2X_all) %>% gather (key = Isoform, value = Value, MyHC1_all, MyHC2A_all, MyHC2X_all) %>% na.omit () %>% mutate (Isoform = gsub ("_.*", "", Isoform)), 
+        aes (x = NoFiltH02, y = Value, fill = Isoform)) +
+  geom_boxplot () + scale_fill_manual (values = col.cluster) + ggtitle ("No Filter") +
+  theme_bw () + theme (axis.title.x = element_blank()) + labs (y = "scaled transformed MFI")
+
+FiltClust_To_DataTable$NoFiltH02 <- ifelse (FiltClust_To_DataTable$NoFiltH02 == 1, "MyHC2A",
+                               ifelse (FiltClust_To_DataTable$NoFiltH02 == 4, "MyHC1",
+                               ifelse (FiltClust_To_DataTable$NoFiltH02 == 2, "MyHC2X", 
+                               ifelse (FiltClust_To_DataTable$NoFiltH02 %in% c (3, 5, 6),
+                                       "NoneFiber", FiltClust_To_DataTable$NoFiltH02))))
+
+# P1 <- ggplot (FiltClust_To_DataTable, 
+#               aes (x = MyHC1_all, y = MyHC2A_all, color = as.factor(NoFiltH02))) +
+#     geom_point (alpha = 0.2) + scale_color_manual (values = col.cluster) +
+#   theme_bw () + theme (legend.position = "none") 
+# P2 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC1_all, y = MyHC2X_all, color = as.factor(NoFiltH02))) +
+#     geom_point (alpha = 0.2) + scale_color_manual (values = col.cluster) +
+#     theme_bw () + theme (legend.position = "none") 
+# P3 <- ggplot (FiltClust_To_DataTable,
+#               aes (x = MyHC2A_all, y = MyHC2X_all, color = as.factor(NoFiltH02))) +
+#     geom_point (alpha = 0.2) + scale_color_manual (values = col.cluster) +
+#     theme_bw () + theme (legend.position = "none") 
+# plot_grid (P1, P2, P3 + rremove("x.text") ,
+#            hjust = 0,
+#            vjust = 1, ncol = 1)
+P1 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC1_all", y = "MyHC2A_all",
+  color = "NoFiltH02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "NoFiltH02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+P2 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC1_all", y = "MyHC2X_all",
+  color = "NoFiltH02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "NoFiltH02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+P3 <- ggscatterhist(
+  FiltClust_To_DataTable, x = "MyHC2A_all", y = "MyHC2X_all",
+  color = "NoFiltH02", size = 3, alpha = 0.01,
+  palette = col.cluster,
+  margin.params = list(fill = "NoFiltH02", color = "black", size = 0.2),
+  margin.plot = "boxplot", legend = "none")
+
+```
+
+```{r MSPlots2, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 8, fig.width = 12}
+# Plots of percentage per muscle/fiber class
+# col.muscle <- c ("GAL" = "#800000", "GRA" = "#4363d8", "REF" = "#f032e6", 
+#                  "SED" = "#ffe119", "SEM" = "#3cb44b", "VAL" = "#e6beff", 
+#                  "VAM" = "#f58231")
+# For paper 
+col.muscle <- c ("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999", 
+                 "SED" = "#0033FF", "SEM" = "#0066FF", "VAL" = "#FF6666", 
+                 "VAM" = "#FF3333")
+ORDER <- c ("GAL" = 7, "GRA" = 1, "REF" = 4, "SEM" = 2, "SED" = 3, "VAL" = 5, "VAM" = 6)
+
+P1 <- FiltClust_To_DataTable %>%
+  mutate (order = ORDER[match (Muscle, names (ORDER))]) %>%
+  filter (Filt1_4_disH02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  count (Filt1_4_disH02) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  mutate (per.n = n / (sum (n) )) %>%
+  ggplot (aes (x = Filt1_4_disH02, y = per.n, fill = forcats::fct_reorder (Muscle, order))) +
+  geom_boxplot ( ) +
+  ggtitle ("Fiber clusters (filter 1-4-dis)") +
+  # scale_fill_manual (values = values_cluster) +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs(fill = "Muscle") +
+  theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank(),
+         axis.title.x = element_blank()) 
+
+P2 <- FiltClust_To_DataTable %>%
+  mutate (order = ORDER[match (Muscle, names (ORDER))]) %>%
+  filter (Filt1_4H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  count (Filt1_4H02) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  mutate (per.n = n / (sum (n) )) %>%
+  ggplot (aes (x = Filt1_4H02, y = per.n, fill = forcats::fct_reorder (Muscle, order))) +
+  geom_boxplot ( ) +
+  ggtitle ("Fiber clusters (filter 1-4)") +
+  # scale_fill_manual (values = values_cluster) +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs(fill = "Muscle") +
+  theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank(),
+         axis.title.x = element_blank()) 
+
+P3 <- FiltClust_To_DataTable %>%
+  mutate (order = ORDER[match (Muscle, names (ORDER))]) %>%
+  filter (Filt1_3H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  count (Filt1_3H02) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  mutate (per.n = n / (sum (n) )) %>%
+  ggplot (aes (x = Filt1_3H02, y = per.n, fill = forcats::fct_reorder (Muscle, order))) +
+  geom_boxplot ( ) +
+  ggtitle ("Fiber clusters (filter 1-3)") +
+  # scale_fill_manual (values = values_cluster) +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs(fill = "Muscle") +
+  theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank(),
+         axis.title.x = element_blank())
+
+P4 <- FiltClust_To_DataTable %>%
+  mutate (order = ORDER[match (Muscle, names (ORDER))]) %>%
+  filter (NoFiltH02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  count (NoFiltH02) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  mutate (per.n = n / (sum (n) )) %>%
+  ggplot (aes (x = NoFiltH02, y = per.n, fill = forcats::fct_reorder (Muscle, order))) +
+  geom_boxplot ( ) +
+  ggtitle ("Fiber clusters (No filter)") +
+  # scale_fill_manual (values = values_cluster) +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs(fill = "Muscle") +
+  theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank(),
+         axis.title.x = element_blank())
+plot_grid (P1, P2, P3, P4, hjust = 0, vjust = 1, ncol = 2)
+
+# New Abbreviations
+muscleAbbreviation <- c ("GAL" = "GL", "GRA" = "GR", "VAL" = "VL", "VAM" = "VM", "SED" = "STD", "SEM" = "STM", "REF" = "RF")
+names (col.muscle) <- muscleAbbreviation [match (names (col.muscle), names (muscleAbbreviation))]
+
+(Tosave <- FiltClust_To_DataTable %>%
+  mutate (order = ORDER[match (Muscle, names (ORDER))],
+          Muscle = muscleAbbreviation [match (Muscle, names (muscleAbbreviation))]) %>%
+  filter (Filt1_3H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X")) %>%
+  mutate (Filt1_3H02 = replace(Filt1_3H02, Filt1_3H02 == "MyHC2A", "Cluster 1"),
+          Filt1_3H02 = replace(Filt1_3H02, Filt1_3H02 == "MyHC1", "Cluster 2"),
+          Filt1_3H02 = replace(Filt1_3H02, Filt1_3H02 == "MyHC2X", "Cluster 3")) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  count (Filt1_3H02) %>%
+  group_by (Individual, Muscle, Sample, order) %>%
+  mutate (per.n = (n / (sum (n)) * 100 )) %>%
+  ggplot (aes (x = Filt1_3H02, y = per.n, fill = forcats::fct_reorder (Muscle, order))) +
+  geom_boxplot (alpha = 0.5) +
+  # scale_fill_manual (values = values_cluster) +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs(fill = "Muscle", y = "%Myofibers") +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (size = 12), 
+         axis.text.y = element_text (size = 12),
+         axis.ticks = element_blank (), legend.text = element_text (size = 12, vjust = 0.5), axis.title.y = element_text (size = 12), axis.title.x = element_blank()))
+
+
+ggsave(Tosave, device = "tiff", units = "cm", width = 12, height = 10, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Per_MyofiberInClusters.tif")
+
+
+# FiltClust_To_DataTable %>% count (Individual, Muscle) %>% pivot_wider (names_from = Individual, values_from = n) 
+# FiltClust_To_DataTable %>% filter (Filt1_3H02 != "Filtered") %>% count (Individual, Muscle) %>% pivot_wider (names_from = Individual, values_from = n) 
+# FiltClust_To_DataTable %>% filter (Filt1_4H02 != "Filtered") %>% count (Individual, Muscle) %>% pivot_wider (names_from = Individual, values_from = n) 
+# FiltClust_To_DataTable %>% filter (Filt1_4_disH02 != "Filtered") %>% count (Individual, Muscle) %>% pivot_wider (names_from = Individual, values_from = n) 
+
+NumberOfFibers <- merge (merge (merge (FiltClust_To_DataTable %>% count (Individual, Muscle, name = "all"), FiltClust_To_DataTable %>% filter (Filt1_3H02 != "Filtered") %>% count (Individual, Muscle, name = "Filt1_3")), FiltClust_To_DataTable %>% filter (Filt1_4H02 != "Filtered") %>% count (Individual, Muscle, name = "Filt1_4")), FiltClust_To_DataTable %>% filter (Filt1_4_disH02 != "Filtered") %>% count (Individual, Muscle, name = "Filt1_4_dis")) %>% 
+  mutate (Filt1_3_Per = Filt1_3/all, Filt1_4_Per = Filt1_4/all, Filt1_4_dis_Per = Filt1_4_dis/all)
+
+P1 <- NumberOfFibers %>% mutate (order = ORDER[match (Muscle, names (ORDER))]) %>% 
+  ggplot (aes (x = Individual, y = Filt1_4_dis_Per*100, fill = forcats::fct_reorder (Muscle, order))) +
+  geom_bar (stat ="identity", position = position_dodge()) +
+  ggtitle ("%remained Fibers after filtering (1-4-dis)") +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs (fill = "Muscle") +
+  theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+         axis.title.x = element_blank ()) 
+P2 <- NumberOfFibers %>% mutate (order = ORDER[match (Muscle, names (ORDER))]) %>% 
+  ggplot (aes (x = Individual, y = Filt1_4_Per*100, fill = forcats::fct_reorder (Muscle, order))) +
+  geom_bar (stat ="identity", position = position_dodge()) +
+  ggtitle ("%remained Fibers after filtering (1-4)") +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs (fill = "Muscle") +
+  theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+         axis.title.x = element_blank ()) 
+P3 <- NumberOfFibers %>% mutate (order = ORDER[match (Muscle, names (ORDER))]) %>% 
+  ggplot (aes (x = Individual, y = Filt1_3_Per*100, fill = forcats::fct_reorder (Muscle, order))) +
+  geom_bar (stat ="identity", position = position_dodge()) +
+  ggtitle ("%remained Fibers after filtering (1-3)") +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs (fill = "Muscle") +
+  theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+         axis.title.x = element_blank ()) 
+plot_grid (P1, P2, P3, hjust = 0, vjust = 1, ncol = 2)
+```
+
+# Statistics to see if there are differences
+```{r Statistics, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 8,fig.width = 4}
+# FiberClusterTable <- FiltClust_To_DataTable %>% filter (Filt1_4_disH02 != "Filtered") %>%
+# group_by (Individual, Muscle) %>%
+# count (Filt1_4_disH02, name = "count") %>%
+# mutate (all = sum (count),
+# n = count/all) %>%
+# filter (Filt1_4_disH02 %in% c ("MyHC1", "MyHC2A", "MyHC2X")) 
+
+rm (list = setdiff(ls (), c ("FiltClust_To_DataTable")))
+FiberClusterTable <- FiltClust_To_DataTable %>%
+  dplyr::select (NoFiltH02, Filt1_3H02, Filt1_4H02, Filt1_4_disH02, Individual, Muscle) %>%
+  reshape2::melt (id.vars = c ("Individual", "Muscle")) %>%
+  filter (value != "Filtered") %>% 
+  group_by (Individual, Muscle, variable) %>%
+  count (value, variable) %>%
+    mutate (all = sum (n),
+            n = n/all) %>%
+    filter (value %in% c ("MyHC1", "MyHC2A", "MyHC2X")) %>%
+  spread (value, n)
+
+clusterData <- c()
+library(lme4)
+for (Data in "Filt1_3H02") {
+# for (Data in c ("NoFiltH02", "Filt1_3H02", "Filt1_4H02", "Filt1_4_disH02")) {
+  FiberClusterTable_subset <- FiberClusterTable %>%
+    filter (variable == Data) 
+    FiberCluter <- matrix (NA, nrow = 3, ncol = 43)
+    rownames (FiberCluter) <- c ("MyHC1", "MyHC2A", "MyHC2X")
+  for (isoform in c ("MyHC1", "MyHC2A", "MyHC2X")) {
+    flm <- as.formula (paste (noquote (isoform), "~ 0 + (1|Individual)"))
+    model1 <- glmer (flm, weights = all,
+                     data = FiberClusterTable_subset, family = "binomial") 
+    flm <- as.formula (paste (noquote (isoform), "~ 0 + Muscle + (1|Individual)"))
+    model2 <- glmer (flm, weights = all,
+                     data = FiberClusterTable_subset, family = "binomial")
+    PairWiseComp <- as.data.frame (lsmeans::lsmeans (model2, pairwise ~ Muscle)$contrasts)[c ("contrast", "p.value", "z.ratio")] %>% arrange (contrast) %>% reshape2::melt () %>% mutate (ColNames = paste (variable, contrast, sep = "_"))
+    FiberCluter [isoform, ] <- c (anova (model1, model2)[-1,]$`Pr(>Chisq)`, 
+                                  PairWiseComp$value)
+    ClusterData <- data.frame (Comp = c (Data, PairWiseComp$ColNames), Pval = c (anova (model1, model2)[-1,]$`Pr(>Chisq)`, PairWiseComp$value), Isoform = isoform, Data = Data)
+    clusterData <- rbind (ClusterData, clusterData)
+  }
+    colnames (FiberCluter) <- c (Data, PairWiseComp$ColNames)
+    assign (paste0 ("FiberCluter_", Data) , FiberCluter)
+    rm (list = c ("FiberClusterTable_subset", "FiberCluter", 
+                  "isoform", "flm", "model1", "model2", "ClusterData", "PairWiseComp",
+                   "Data"))
+    
+}
+
+for (Data in c ("NoFiltH02", "Filt1_3H02", "Filt1_4H02", "Filt1_4_disH02")) {
+  ClusterPlot <- clusterData [clusterData$Data == Data, ] %>% as.data.frame () %>%
+    filter (grepl ("z.ratio", Comp)) %>% 
+    mutate (Comp = gsub ("z.ratio_", "", Comp)) %>%
+    spread (key = "Comp", value = "Pval") %>% tibble::column_to_rownames("Isoform")
+  ClusterPlot$Data <- NULL
+  ClusterPlot$`REF - GRA` <- ClusterPlot$`GRA - REF` * -1; ClusterPlot$`GRA - REF` <- NULL
+  ClusterPlot$`VAL - GRA` <- ClusterPlot$`GRA - VAL` * -1; ClusterPlot$`GRA - VAL` <- NULL
+  ClusterPlot$`VAM - GRA` <- ClusterPlot$`GRA - VAM` * -1; ClusterPlot$`GRA - VAM` <- NULL
+  ClusterPlot$`VAL - SED` <- ClusterPlot$`SED - VAL` * -1; ClusterPlot$`SED - VAL` <- NULL
+  ClusterPlot$`VAM - SED` <- ClusterPlot$`SED - VAM` * -1; ClusterPlot$`SED - VAM` <- NULL
+  ClusterPlot$`VAL - SEM` <- ClusterPlot$`SEM - VAL` * -1; ClusterPlot$`SEM - VAL` <- NULL
+  ClusterPlot$`VAM - SEM` <- ClusterPlot$`SEM - VAM` * -1; ClusterPlot$`SEM - VAM` <- NULL
+  breaks <- seq (min (ClusterPlot), 
+               max (ClusterPlot), length.out = 1000)
+  point1 <- which.min (abs (breaks - 2.95)) 
+  point2 <- which.min (abs (breaks + 2.95)) 
+  midpoint <- which.min (abs (breaks - 0))
+  rampCol1 <- colorRampPalette (c ("darkblue", "blue")) (point2)
+  rampCol1.1 <- colorRampPalette (c ("lightblue", "white")) (midpoint-point2)
+  rampCol2.1 <- colorRampPalette (c ("white", "pink")) (point1-midpoint)
+  rampCol2 <- colorRampPalette (c ("red", "darkred")) (length (breaks) - point1)
+  rampCols <- c (rampCol1, rampCol1.1, rampCol2.1, rampCol2)
+  print (pheatmap::pheatmap (t (ClusterPlot), 
+                      color = rampCols, scale = "none",  legend_labels =  "t.ratio",
+                      cluster_cols = T, cluster_rows = T, main = Data,
+                      labels_row = gsub ("-", "vs", gsub (".*:", "", colnames (ClusterPlot))),
+                      labels_col = rownames (ClusterPlot)))
+}
+
+## PAPER
+ClusterPlot <- clusterData %>% as.data.frame () %>%
+    filter (grepl ("z.ratio", Comp)) %>% 
+    mutate (Comp = gsub ("z.ratio_", "", Comp)) %>%
+    spread (key = "Comp", value = "Pval") %>% tibble::column_to_rownames("Isoform")
+ClusterPlot$Data <- NULL
+ClusterPlot$`REF - GRA` <- ClusterPlot$`GRA - REF` * -1; ClusterPlot$`GRA - REF` <- NULL
+ClusterPlot$`VAL - GRA` <- ClusterPlot$`GRA - VAL` * -1; ClusterPlot$`GRA - VAL` <- NULL
+ClusterPlot$`VAM - GRA` <- ClusterPlot$`GRA - VAM` * -1; ClusterPlot$`GRA - VAM` <- NULL
+ClusterPlot$`VAL - SED` <- ClusterPlot$`SED - VAL` * -1; ClusterPlot$`SED - VAL` <- NULL
+ClusterPlot$`VAM - SED` <- ClusterPlot$`SED - VAM` * -1; ClusterPlot$`SED - VAM` <- NULL
+ClusterPlot$`VAL - SEM` <- ClusterPlot$`SEM - VAL` * -1; ClusterPlot$`SEM - VAL` <- NULL
+ClusterPlot$`VAM - SEM` <- ClusterPlot$`SEM - VAM` * -1; ClusterPlot$`SEM - VAM` <- NULL
+breaks <- seq (min (ClusterPlot), 
+               max (ClusterPlot), length.out = 1000)
+point1 <- which.min (abs (breaks - 2.95)) 
+point2 <- which.min (abs (breaks + 2.95)) 
+midpoint <- which.min (abs (breaks - 0))
+rampCol1 <- colorRampPalette (c ("darkblue", "blue")) (point2)
+rampCol1.1 <- colorRampPalette (c ("lightblue", "white")) (midpoint-point2)
+rampCol2.1 <- colorRampPalette (c ("white", "pink")) (point1-midpoint)
+rampCol2 <- colorRampPalette (c ("red", "darkred")) (length (breaks) - point1)
+rampCols <- c (rampCol1, rampCol1.1, rampCol2.1, rampCol2)
+
+colnames (ClusterPlot) <- gsub ("SED", "STD", colnames (ClusterPlot))
+colnames (ClusterPlot) <- gsub ("SEM", "STM", colnames (ClusterPlot))
+colnames (ClusterPlot) <- gsub ("GRA", "GR ", colnames (ClusterPlot))
+colnames (ClusterPlot) <- gsub ("GAL", "GL  ", colnames (ClusterPlot))
+colnames (ClusterPlot) <- gsub ("REF", "RF  ", colnames (ClusterPlot))
+colnames (ClusterPlot) <- gsub ("VAM", "VM ", colnames (ClusterPlot))
+colnames (ClusterPlot) <- gsub ("VAL", "VL  ", colnames (ClusterPlot))
+colnames (ClusterPlot) <- gsub ("-", "- ", colnames (ClusterPlot))
+rownames (ClusterPlot)[rownames (ClusterPlot) == "MyHC2A"] = "Cluster 1"
+rownames (ClusterPlot)[rownames (ClusterPlot) == "MyHC1"] = "Cluster 2"
+rownames (ClusterPlot)[rownames (ClusterPlot) == "MyHC2X"] = "Cluster 3"
+        
+
+(Tosave <- pheatmap::pheatmap (t (ClusterPlot), 
+                           color = rampCols, scale = "none",  legend_labels =  "t.ratio",
+                      cluster_cols = T, cluster_rows = T, 
+                      labels_row = gsub ("-", "vs", gsub (".*:", "", colnames (ClusterPlot))),
+                      labels_col = rownames (ClusterPlot)))
+
+
+Tosave <- pheatmap::pheatmap (t (AnovaTest [, grep ("t.ratio:", colnames (AnovaTest))]), color = rampCols, scale = "none", legend_labels = "t.ratio", cluster_cols = T, cluster_rows = T, labels_row = gsub ("-", "vs  ", gsub (".*:", "", grep ("t.ratio: ", colnames (AnovaTest), value = T) )), fontsize = 12, angle_col = 90) 
+
+ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 8, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Myofiber_t.ratio2.tif")
+
+
+FiberClusterToPlot <- FiberClusterTable %>% filter (variable == "Filt1_3H02") %>% 
+  group_by (Muscle) %>% summarise_all(funs(mean)) %>%
+  dplyr::select (Muscle, MyHC1, MyHC2A, MyHC2X) %>%
+  tibble::column_to_rownames("Muscle")
+
+FiberTyPe_Muscle_P1 <- gplots::heatmap.2 (as.matrix (FiberClusterToPlot),
+                                          col = colorRampPalette (c ("white", "gray")),
+                   scale = "none", trace = "none", dendrogram = "row",
+                   breaks = 10, key = F, symm = F, cexRow = 1, cexCol = 1, 
+                   labCol = c ("Cluster 2", "Cluster 1", "Cluster 3"),
+                   cellnote = round (FiberClusterToPlot*100, digits = 2), notecol = "black")
+eval(FiberTyPe_Muscle_P1$call)
+
+Tosave <- pheatmap::pheatmap (as.matrix (FiberClusterToPlot) *100, 
+                              color = colorRampPalette (c ("white", "darkgray"))(25),
+                              scale = "none", fontsize = 12, cluster_cols = T, cluster_rows = T,
+                              # cellwidth = 30, cellheight = 30, 
+                              breaks = seq (0, 50, 2),
+                              labels_col = c ("Cluster 2", "Cluster 1", "Cluster 3"),
+                              angle_col = 90)
+ggsave(Tosave, device = "tiff", units = "cm", width = 8, height = 10, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Per_MyofiberInClusters-heatmap.tif")
+```
+
+```{r, include = F}
+library (misc3d)
+library (plot3D)
+# MyHC1 <- FiltClust_To_DataTable$MyHC1_all
+# MyHC2A <- FiltClust_To_DataTable$MyHC2A_all
+# MyHC2X <- FiltClust_To_DataTable$MyHC2X_all
+# D3_all <- kde3d (MyHC1, MyHC2X, MyHC2A, n = 200) 
+# save (D3_all, file = "imageQuantification/output/myofiberTyping/clusteringResults/Plot3D/D3_all.RData") 
+# load ("imageQuantification/output/myofiberTyping/clusteringResults/Plot3D/D3_all.RData") 
+# library (rgl)
+# contour3d (D3_all$d, 2, x = D3_all$x, y = D3_all$y, z = D3_all$z, scale = FALSE, color = "#fffac8")
+# title3d ('' , '' , 'MyHC1', 'MyHC2A', 'MyHC2X')
+# box3d (col = "grey")
+# axes3d (c ('x-+', 'z--', 'y--'))
+
+# MyHC1 <- na.omit (FiltClust_To_DataTable$MyHC1_Filt1_3)
+# MyHC2A <- na.omit (FiltClust_To_DataTable$MyHC2A_Filt1_3)
+# MyHC2X <- na.omit (FiltClust_To_DataTable$MyHC2X_Filt1_3)
+# D3_Filt1_3 <- kde3d (MyHC1, MyHC2X, MyHC2A, n = 200) 
+# save (D3_Filt1_3, file = "imageQuantification/output/myofiberTyping/clusteringResults/Plot3D/D3_Filt1_3.RData") 
+load ("imageQuantification/output/myofiberTyping/clusteringResults/Plot3D/D3_Filt1_3.RData")
+library (rgl)
+misc3d::contour3d (D3_Filt1_3$d, 2, x = D3_Filt1_3$x, y = D3_Filt1_3$y, z = D3_Filt1_3$z, scale = FALSE, color = "#fffac8")
+title3d ('' , '' , 'MyHC1', 'MyHC2A', 'MyHC2X')
+box3d (col = "grey")
+axes3d (c ('x-+', 'z--', 'y--'))
+
+
+
+# MyHC1 <- na.omit (FiltClust_To_DataTable$MyHC1_Filt1_4)
+# MyHC2A <- na.omit (FiltClust_To_DataTable$MyHC2A_Filt1_4)
+# MyHC2X <- na.omit (FiltClust_To_DataTable$MyHC2X_Filt1_4)
+# D3_Filt1_4 <- kde3d (MyHC1, MyHC2X, MyHC2A, n = 200) 
+# save (D3_Filt1_4, file = "imageQuantification/output/myofiberTyping/clusteringResults/Plot3D/D3_Filt1_4.RData") 
+# load ("imageQuantification/output/myofiberTyping/clusteringResults/Plot3D/D3_Filt1_4.RData") 
+
+# MyHC1 <- na.omit (FiltClust_To_DataTable$MyHC1_Filt1_4_dis)
+# MyHC2A <- na.omit (FiltClust_To_DataTable$MyHC2A_Filt1_4_dis)
+# MyHC2X <- na.omit (FiltClust_To_DataTable$MyHC2X_Filt1_4_dis)
+# D3_Filt1_4_dis <- kde3d (MyHC1, MyHC2X, MyHC2A, n = 200) 
+# save (D3_Filt1_4_dis, file = "imageQuantification/output/myofiberTyping/clusteringResults/Plot3D/D3_Filt1_4_dis.RData") 
+# load ("imageQuantification/output/myofiberTyping/clusteringResults/Plot3D/D3_Filt1_4_dis.RData") 
+
+col.cluster <- c ("MyHC1" = "blue", "MyHC2A" = "red", "MyHC2X" = "green", 
+                 # "Filtered" = "grey95",
+                 "OtherCluters" = "grey", "NoneFiber" = "yellow")
+```
+
+### 3D plot: all the fibers (no filtering)
+```{r 3Dplot1, webgl=TRUE, warning=F, message=F, echo=F}
+To3Dplot <- na.omit (data.frame (FiltClust_To_DataTable[, c ("MyHC1_all", "MyHC2A_all", "MyHC2X_all")], Col = as.factor (col.cluster[match (FiltClust_To_DataTable$NoFiltH02, names (col.cluster))])))
+
+with (To3Dplot, plot3d (MyHC1_all, MyHC2A_all, MyHC2X_all, col = Col, xlab = "MyHC1", ylab = "MyHC2A", zlab = "MyHC2X"))
+legend3d ("topright", legend = names (col.cluster), col = col.cluster, pch=19)
+```
+
+### 3D plot: Fibers after filtering for segmentation quality, size and circularity 
+```{r 3Dplot2, webgl=TRUE, warning=F, message=F, echo=F}
+save (FiltClust_To_DataTable, file = "FiltClust_To_DataTable.RData")
+To3Dplot <- na.omit (data.frame (FiltClust_To_DataTable[FiltClust_To_DataTable$Filt1_3H02 != "OtherCluters" , c ("MyHC1_Filt1_3", "MyHC2A_Filt1_3", "MyHC2X_Filt1_3")], Col = as.factor (col.cluster[match (FiltClust_To_DataTable$Filt1_3H02[FiltClust_To_DataTable$Filt1_3H02 != "OtherCluters"], names (col.cluster))])))
+
+with (To3Dplot, plot3d (MyHC1_Filt1_3, MyHC2A_Filt1_3, MyHC2X_Filt1_3, col = Col, xlab = "MyHC1", ylab = "MyHC2A", zlab = "MyHC2X", size = .1, type = "p", forceClipregion = T))
+legend3d ("topright", legend = names (col.cluster), col = col.cluster, pch=19)
+
+To3Dplot <- na.omit (data.frame (FiltClust_To_DataTable[, c ("MyHC1_Filt1_3", "MyHC2A_Filt1_3", "MyHC2X_Filt1_3")], Col = as.factor (col.cluster[match (FiltClust_To_DataTable$Filt1_3H02, names (col.cluster))])))
+
+# Add small dots on basal plane and on the depth plane
+# scatter3D_fancy <- function(x, y, z,..., colvar = z)
+#   {
+#    panelfirst <- function(pmat) {
+#       XY <- trans3D(x, y, z = rep(min(z), length(z)), pmat = pmat)
+#       scatter2D(XY$x, XY$y, colvar = colvar, pch = ".", 
+#               cex = 2, add = TRUE, colkey = FALSE)
+#    
+#       XY <- trans3D(x = rep(min(x), length(x)), y, z, pmat = pmat)
+#       scatter2D(XY$x, XY$y, colvar = colvar, pch = ".", 
+#               cex = 2, add = TRUE, colkey = FALSE)
+#   }
+#   scatter3D(x, y, z, ..., colvar = colvar, panel.first=panelfirst,
+#     colkey = list(length = 0.5, width = 0.5, cex.clab = 0.75)) 
+# }
+library(plot3D)
+# scatter3D_fancy (To3Dplot$MyHC1_Filt1_3, To3Dplot$MyHC2A_Filt1_3, To3Dplot$MyHC2X_Filt1_3,
+#                  col.cluster = To3Dplot$Col,
+#                  pch = 16, ticktype = "detailed", theta = 15, d = 2, clab = "cluster")
+
+tail (sort(To3Dplot$MyHC1_Filt1_3),30)
+tail (sort(To3Dplot$MyHC2A_Filt1_3),30)
+tail (sort(To3Dplot$MyHC2X_Filt1_3),30)
+
+tiff (filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Plot3D.tif", width = 8, height = 8, units = "cm", res = 650)
+par(mai = c(0.5, 0.5, 0.5, 0.5))
+(Tosave = scatter3D (y = To3Dplot$MyHC1_Filt1_3, z = To3Dplot$MyHC2A_Filt1_3,
+           x = To3Dplot$MyHC2X_Filt1_3,
+           col = as.character (To3Dplot$Col), colvar = NULL,
+           pch = ".", clab = "cluster", phi = 0, bty = "b2", xlab = "MyHC2X",
+           ylab = "MyHC1", zlab = "MyHC2A", fontsize = 12))
+dev.off()
+To3Dplot <- To3Dplot[To3Dplot$MyHC1_Filt1_3 < 2,]
+To3Dplot <- To3Dplot[To3Dplot$MyHC2A_Filt1_3 < 1.5,]
+To3Dplot <- To3Dplot[To3Dplot$MyHC2X_Filt1_3 < 1.3,]
+
+tiff (filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Plot3D_3.tif", width = 8, height = 8, units = "cm", res = 650)
+par(mai = c(0.5, 0.5, 0.5, 0.5))
+scatter3D (y = To3Dplot$MyHC1_Filt1_3, z = To3Dplot$MyHC2A_Filt1_3,
+           x = To3Dplot$MyHC2X_Filt1_3,
+           col = as.character (To3Dplot$Col), colvar = NULL,
+           pch = ".", clab = "cluster", phi = 0, bty = "b2", xlab = "MyHC2X", colkey = T,
+           ylab = "MyHC1", zlab = "MyHC2A", fontsize = 12)
+legend("bottom", legend = c ("Cluster 1", "Cluster 2", "Cluster 3", "Cluster 4", "Small clusters"),
+   col =  c ("red", "blue", "green", "yellow", "gray"), 
+pch = 18, cex = 1.5)
+dev.off()
+
+
+```
+
+### 3D plot: Fibers after filtering for segmentation quality, size, circularity, MFI
+```{r 3Dplot3, webgl=TRUE, warning=F, message=F, echo=F}
+To3Dplot <- na.omit (data.frame (FiltClust_To_DataTable[, c ("MyHC1_Filt1_4", "MyHC2A_Filt1_4", "MyHC2X_Filt1_4")], Col = as.factor (col.cluster[match (FiltClust_To_DataTable$Filt1_4H02, names (col.cluster))])))
+
+with (To3Dplot, plot3d (MyHC1_Filt1_4, MyHC2A_Filt1_4, MyHC2X_Filt1_4, col = Col, xlab = "MyHC1", ylab = "MyHC2A", zlab = "MyHC2X"))
+legend3d ("topright", legend = names (col.cluster), col = col.cluster, pch=19)
+```
+
+### 3D plot: Fibers after filtering for segmentation quality, size, circularity, MFI at the section edges
+```{r 3Dplot4, test-rgl, webgl=TRUE, warning=F, message=F, echo=F}
+To3Dplot <- na.omit (data.frame (FiltClust_To_DataTable[, c ("MyHC1_Filt1_4_dis", "MyHC2A_Filt1_4_dis", "MyHC2X_Filt1_4_dis")], Col = as.factor (col.cluster[match (FiltClust_To_DataTable$Filt1_4_disH02, names (col.cluster))])))
+
+with (To3Dplot, plot3d (MyHC1_Filt1_4_dis, MyHC2A_Filt1_4_dis, MyHC2X_Filt1_4_dis, col = Col, xlab = "MyHC1", ylab = "MyHC2A", zlab = "MyHC2X"))
+legend3d ("topright", legend = names (col.cluster), col = col.cluster, pch=19)
+```
+
+```{r SizeStaPlot, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 12, fig.width = 12}
+# col.muscle <- c ("GAL" = "#800000", "GRA" = "#4363d8", "REF" = "#f032e6", 
+#                  "SED" = "#ffe119", "SEM" = "#3cb44b", "VAL" = "#e6beff", 
+#                  "VAM" = "#f58231")
+# For paper 
+col.muscle <- c ("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999", 
+                 "SED" = "#0033FF", "SEM" = "#0066FF", "VAL" = "#FF6666", 
+                 "VAM" = "#FF3333")
+ORDER <-  c ("GAL" = 7, "GRA" = 1, "REF" = 4, "SEM" = 2, "SED" = 3, "VAL" = 5, "VAM" = 6)
+col.cluster <- c ("MyHC1" = "blue", "MyHC2A" = "red", "MyHC2X" = "green", 
+                 "Filtered" = "grey95", "OtherCluters" = "grey", "NoneFiber" = "yellow")
+
+P1 <- ggplot (FiltClust_To_DataTable %>% filter (Filt1_3H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X")) %>%
+          mutate (order = ORDER[match (Muscle, names (ORDER))]),
+        aes (x = forcats::fct_reorder (Muscle, order), y = Area, col = forcats::fct_reorder (Muscle, order))) + 
+  geom_boxplot() +
+  scale_color_manual (values = col.muscle) +
+  theme_bw () + labs (color = "Muscle") +
+  ggtitle ("CSAs (muscle)") +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+         axis.title.x = element_blank (), legend.position = "none")
+P2 <- ggplot (FiltClust_To_DataTable %>% filter (Filt1_3H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X")) %>%
+          mutate (order = ORDER[match (Muscle, names (ORDER))]),
+        aes (x = Filt1_3H02, y = Area, col = Filt1_3H02)) + 
+  geom_boxplot() +
+  scale_color_manual (values = col.cluster) +
+  theme_bw () + labs (color = "Cluster") +
+  ggtitle ("CSAs (cluster)") +
+  theme (panel.grid = element_blank (),
+         axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+         axis.title.x = element_blank (), legend.position = "none")
+
+P4 <- ggplot (FiltClust_To_DataTable %>% filter (Filt1_3H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X")) %>%
+          mutate (order = ORDER[match (Muscle, names (ORDER))]),
+        aes (x = Filt1_3H02, y = Area, fill = forcats::fct_reorder (Muscle, order))) + 
+  geom_boxplot() +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs (fill = "Muscle") +
+  ggtitle ("CSAs (Muscle)") +
+  theme (panel.grid = element_blank (),
+         axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+         axis.title.x = element_blank ())
+
+P3 <- ggplot (FiltClust_To_DataTable %>% filter (Filt1_3H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X")) %>%
+          mutate (order = ORDER[match (Muscle, names (ORDER))]),
+        aes (x = forcats::fct_reorder (Muscle, order), y = Area, fill = Filt1_3H02)) + 
+  geom_boxplot() +
+  scale_fill_manual (values = col.cluster) +
+  theme_bw () + labs (fill = "Cluster") +
+  ggtitle ("CSAs (Cluster)") +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+         axis.title.x = element_blank ())
+
+plot_grid (P1, P2, P3, P4, hjust = 0, vjust = 1, ncol = 2)
+
+# ggplot (FiltClust_To_DataTable %>% filter (Filt1_4H02 != "Filtered") %>%
+#           mutate (order = ORDER[match (Muscle, names (ORDER))]),
+#         aes (x = Filt1_4H02, y = Circ., fill = forcats::fct_reorder (Muscle, order))) + 
+#   geom_boxplot() +
+#   scale_fill_manual (values = col.muscle) +
+#   theme_bw () + labs (fill = "Muscle") +
+#   ggtitle ("Circularity per sample") +
+#   theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+#          axis.title.x = element_blank ())
+# col.cluster <- c ("MyHC1" = "blue", "MyHC2A" = "red", "MyHC2X" = "green", 
+#                  "Filtered" = "grey95", "OtherCluters" = "grey", "NoneFiber" = "yellow")
+# 
+# ggplot (FiltClust_To_DataTable %>% filter (Filt1_4H02 != "Filtered") %>%
+#           mutate (order = ORDER[match (Muscle, names (ORDER))]),
+#         aes (x = forcats::fct_reorder (Muscle, order), y = Circ., fill = Filt1_4H02)) + 
+#   geom_boxplot() +
+#   scale_fill_manual (values = col.cluster) +
+#   theme_bw () + labs (fill = "Muscle") +
+#   ggtitle ("Circularity per sample") +
+#   theme (axis.text.x = element_text (angle = 90), axis.title.y = element_blank (),
+#          axis.title.x = element_blank ())
+
+# for (Data in c ("NoFiltH02", "Filt1_3H02", "Filt1_4H02", "Filt1_4_disH02")) {
+#   FiltClust_To_DataTable_subset <- FiltClust_To_DataTable %>%
+#     filter (Filt1_4H02 != "Filtered") 
+#     FiberCluter <- matrix (NA, nrow = 3, ncol = 43)
+#     rownames (FiberCluter) <- c ("MyHC1", "MyHC2A", "MyHC2X")
+#   for (parameter in c ("Area", "Circ.")) {
+#     fml <- as.formula (paste (noquote (parameter), "~ 0 + Muscle + Filt1_4H02 + (1|Individual)"))
+#     model <-  lmerTest::lmer (fml, data = FiltClust_To_DataTable_subset)
+#     print (anova (model)$`Pr(>F)`)}
+#     
+#     PairWiseComp <- as.data.frame (lsmeans::lsmeans (model, pairwise ~ Muscle)$contrasts)[c ("contrast", "p.value", "t.ratio")] %>% arrange (contrast) %>% reshape2::melt () %>% mutate (ColNames = paste (variable, contrast, sep = "_"))
+#     FiberCluter [isoform, ] <- c (anova (model1, model2)[-1,]$`Pr(>Chisq)`, 
+#                                   PairWiseComp$value)
+#     ClusterData <- data.frame (Comp = c (Data, PairWiseComp$ColNames), Pval = c (anova (model1, model2)[-1,]$`Pr(>Chisq)`, PairWiseComp$value), Isoform = isoform, Data = Data)
+#     clusterData <- rbind (ClusterData, clusterData)
+#   }
+#     colnames (FiberCluter) <- c (Data, PairWiseComp$ColNames)
+#     assign (paste0 ("FiberCluter_", Data) , FiberCluter)
+#     rm (list = c ("FiberClusterTable_subset", "FiberCluter", 
+#                   "isoform", "flm", "model1", "model2", "ClusterData", "PairWiseComp",
+#                    "Data"))
+#     
+# }
+
+
+ggplot (FiltClust_To_DataTable %>% 
+          filter (Filt1_3H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X")) %>%
+          mutate (order = ORDER[match (Muscle, names (ORDER))]),
+        aes (x = Filt1_3H02, y = Area, fill = forcats::fct_reorder (Muscle, order))) + 
+  geom_boxplot (position = position_dodge(0.9), outlier.shape = NA, alpha = 0.5) +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs (fill = element_blank(), y = "Cross-sectional area (um2)") +
+  scale_y_continuous ( limits = quantile (FiltClust_To_DataTable$Area, c(0.1, 0.9))) +
+  theme (panel.grid = element_blank (), axis.text.x = element_text (size = 12), 
+         # axis.text.y = element_text (angle = 90, hjust = 1),
+         axis.title.x = element_blank (), legend.position = "bottom" ) +
+  facet_wrap(Muscle~., nrow = 1)
+
+ 
+ggplot (FiltClust_To_DataTable %>%
+          filter (!Filt1_3H02 %in% c ("Filtered", "NoneFiber")) %>%
+          mutate (order = ORDER[match (Muscle, names (ORDER))]),
+        aes (x = forcats::fct_reorder (Muscle, order), y = Area, 
+             fill = Muscle)) + 
+  geom_boxplot(alpha = .5, outlier.size = 0.6) +
+  scale_fill_manual (values = col.muscle) +
+  theme_bw () + labs (y = "Cross-sectional area (um2)", x = element_blank ()) +
+  scale_y_continuous ( limits = quantile (FiltClust_To_DataTable$Area, c(0.1, 0.97))) +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (angle = 90, size = 10, vjust = 0.5, hjust = 1),
+         axis.ticks = element_blank (), legend.text = element_text ( size = 10, vjust = 0.5),
+         strip.text = element_text (size = 11, face = "bold"), legend.position = "none")
+```
+
+```{r}
+Data <- new.env (); load ("F://Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/MuscleDAtaset/Outputs/BatchMusCorrectedAllData.RData", envir = Data)
+v_BatchMus <- Data$v_BatchMus
+SubsetToPlot <- data.frame (MYH1 = v_BatchMus$E [rownames (v_BatchMus) == "ENSG00000109061"],
+                            MYH2 = v_BatchMus$E [rownames (v_BatchMus) == "ENSG00000125414"],
+                            MYH7 = v_BatchMus$E [rownames (v_BatchMus) == "ENSG00000092054"],
+                            Muscle = gsub ("MD[0-9][0-9]_|_Sam.*", "", colnames (v_BatchMus)),
+                            Individual = gsub ("_.*", "", colnames (v_BatchMus)))
+
+
+ToPlot <- merge (merge (merge (FiltClust_To_DataTable %>%
+  mutate (order = ORDER[match (Muscle, names (ORDER))]) %>%
+    group_by (Individual, Muscle, Sample, order) %>% 
+    filter (Filt1_4_disH02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+    count (Filt1_4_disH02, name = "1_4_dis") %>%
+    group_by (Individual, Muscle) %>%
+    mutate (per.n_Filt1_4_dis = `1_4_dis` / (sum (`1_4_dis`))) %>%
+    dplyr::rename (Clusters = Filt1_4_disH02), 
+  FiltClust_To_DataTable %>%
+    group_by (Individual, Muscle, Sample) %>%
+    filter (Filt1_4H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+    count (Filt1_4H02, name = "1_4") %>%
+    group_by (Individual, Muscle) %>%
+    mutate (per.n_Filt1_4 = `1_4` / (sum (`1_4`))) %>%
+    dplyr::rename (Clusters = Filt1_4H02)), 
+  FiltClust_To_DataTable %>%
+    group_by (Individual, Muscle, Sample) %>%
+    filter (Filt1_3H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+    count (Filt1_3H02, name = "1_3") %>%
+    group_by (Individual, Muscle) %>%
+    mutate (per.n_Filt1_3 = `1_3` / (sum (`1_3`))) %>%
+    dplyr::rename (Clusters = Filt1_3H02)), 
+  FiltClust_To_DataTable %>%
+    group_by (Individual, Muscle, Sample) %>%
+    filter (NoFiltH02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+    count (NoFiltH02, name = "NoF") %>%
+    group_by (Individual, Muscle) %>%
+    mutate (per.n_NoFilter = NoF / (sum (NoF))) %>%
+    dplyr::rename (Clusters = NoFiltH02), all.x = T)
+  
+ToPlot <- merge (ToPlot, SubsetToPlot, by = c ("Individual", "Muscle"))
+
+P1 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2X"), aes(x = MYH1, y = per.n_Filt1_4_dis*100)) +
+  geom_point (size = 2, col = "green") + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("Filter 1-4-dis") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC2X cluster", x = expression(italic ("MYH1")))
+P2 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2A"), aes(x = MYH2, y = per.n_Filt1_4_dis*100)) +
+  geom_point (size = 2, col = "red") + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("Filter 1-4-dis") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC2A cluster", x = expression(italic ("MYH2")))
+P3 <- ggplot (ToPlot %>% filter (Clusters == "MyHC1"), aes(x = MYH7, y = per.n_Filt1_4_dis*100)) +
+  geom_point (size = 2, col = "blue") + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("Filter 1-4-dis") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC1 cluster", x = expression(italic ("MYH7")))
+P4 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2X"), aes(x = MYH1, y = per.n_Filt1_4*100)) +
+  geom_point (size = 2, col = "green") + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("Filter 1-4") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC2X cluster", x = expression(italic ("MYH1")))
+P5 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2A"), aes(x = MYH2, y = per.n_Filt1_4*100)) +
+  geom_point (size = 2, col = "red") + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("Filter 1-4") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC2A cluster", x = expression(italic ("MYH2")))
+P6 <- ggplot (ToPlot %>% filter (Clusters == "MyHC1"), aes(x = MYH7, y = per.n_Filt1_4*100)) +
+  geom_point (size = 2, col = "blue") + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("Filter 1-4") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC1 cluster", x = expression(italic ("MYH7")))
+P7 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2X"), aes(x = MYH1, y = per.n_Filt1_3*100)) +
+  geom_point (size = 2, col = "green") + geom_smooth (method = lm) + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("Filter 1-3") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC2X cluster", x = expression(italic ("MYH1")))
+P8 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2A"), aes(x = MYH2, y = per.n_Filt1_3*100)) +
+  geom_point (size = 2, col = "red") + geom_smooth (method = lm) + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("Filter 1-3") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC2A cluster", x = expression(italic ("MYH2")))
+P9 <- ggplot (ToPlot %>% filter (Clusters == "MyHC1"), aes(x = MYH7, y = per.n_Filt1_3*100)) +
+  geom_point (size = 2, col = "blue") + geom_smooth (method = lm) + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("Filter 1-3") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC1 cluster", x = expression(italic ("MYH7")))
+P10 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2X"), aes(x = MYH1, y = per.n_NoFilter*100)) +
+  geom_point (size = 2, col = "green") + geom_smooth (method = lm) + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("No Filter") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC2X cluster", x = expression(italic ("MYH1")))
+P11 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2A"), aes(x = MYH2, y = per.n_NoFilter*100)) +
+  geom_point (size = 2, col = "red") + geom_smooth (method = lm) + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("No Filter") + 
+  theme_bw () + labs (y = "Propertion of fibers in MyHC2A cluster", x = expression(italic ("MYH2")))
+P12 <- ggplot (ToPlot %>% filter (Clusters == "MyHC1"), aes(x = MYH7, y = per.n_NoFilter*100)) +
+  geom_point (size = 2, col = "blue") + geom_smooth (method = lm) + geom_smooth (method = lm) + stat_cor (method = "pearson") + ggtitle ("No Filter") +
+  theme_bw () + labs (y = "Propertion of fibers in MyHC1 cluster", x = expression(italic ("MYH7")))
+
+plot_grid (P10, P7, P4, P1, P11, P8, P5, P2, P12, P9, P6, P3, hjust = 0, vjust = 1, ncol = 4)
+
+P1 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2A"), aes(x = MYH2, y = per.n_Filt1_3*100)) +
+  geom_point (size = 1.5, col = "#CC3333") +
+  geom_smooth (method = lm, colour = "black") + stat_cor (method = "pearson") + theme_bw () +
+  labs (y = "%Myofibers in cluster 1", x = expression("LogCPM"~italic ("MYH2"))) +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (size = 10, vjust = 0.5, hjust = 1),
+         axis.ticks = element_blank (), legend.text = element_text ( size = 12, vjust = 0.5),
+         strip.text = element_text (size = 12, face = "bold"), legend.position = "none")
+P2 <- ggplot (ToPlot %>% filter (Clusters == "MyHC1"), aes(x = MYH7, y = per.n_Filt1_3*100)) +
+  geom_point (size = 1.5, col = "#0066CC") +
+  geom_smooth (method = lm, colour = "black") + stat_cor (method = "pearson") + theme_bw () +
+  labs (y = "%Myofibers in cluster 2", x = expression("LogCPM"~italic ("MYH7"))) +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (size = 10, vjust = 0.5, hjust = 1),
+         axis.ticks = element_blank (), legend.text = element_text ( size = 12, vjust = 0.5),
+         strip.text = element_text (size = 12, face = "bold"), legend.position = "none")
+P3 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2X"), aes(x = MYH1, y = per.n_Filt1_3*100)) +
+  geom_point (size = 1.5, col = "#339966") + 
+  geom_smooth (method = lm, colour = "black") + stat_cor (method = "pearson", ) + theme_bw () + 
+  labs (y = "%Myofibers in cluster 3", x = expression("LogCPM"~italic ("MYH1"))) +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (size = 10, vjust = 0.5, hjust = 1),
+         axis.ticks = element_blank (), legend.text = element_text ( size = 12, vjust = 0.5),
+         strip.text = element_text (size = 12, face = "bold"), legend.position = "none")
+(Tosave <- plot_grid (P1, P2, P3, hjust = 0, vjust = 1, ncol = 3))
+ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 6, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Myofibertype_gene.tif")
+
+Consensus <- "Consensus0.4"
+filenames <- list.files (recursive = TRUE, path = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/MuscleDataset/Outputs/ConsensusWGCNA", pattern = paste0 (Consensus, ".csv"), full.names = TRUE)
+
+mergedMEs <- read.csv (filenames [grepl ("ModuleEigengenes", filenames)]) 
+rownames (mergedMEs) <- colnames (v_BatchMus)
+
+# Rename modules (colors to numbers)
+Module_rename <- data.frame (Module = prob::setdiff (sort (unique (gsub ("ME", "", colnames (mergedMEs)))),
+                                                     "grey"), 
+                             Rename = paste ("M", seq.int (length (unique (colnames (mergedMEs)))-1), sep = "."),
+                             stringsAsFactors = FALSE) 
+
+
+colnames (mergedMEs)[colnames (mergedMEs) != "MEgrey"] <- Module_rename$Rename [ match (gsub ("ME", "", colnames (mergedMEs)[colnames (mergedMEs) != "MEgrey"]), Module_rename$Module) ] 
+
+
+colnames (mergedMEs)[colnames (mergedMEs) == "MEgrey"] = "grey"
+colnames (mergedMEs) <-  gsub ("^ME", "", colnames (mergedMEs))
+
+SubsetToPlot <- data.frame (M.7 = mergedMEs ["M.7"],
+                            Muscle = gsub ("MD[0-9][0-9]_|_Sam.*", "", rownames (mergedMEs)),
+                            Individual = gsub ("_.*", "", rownames (mergedMEs)))
+ToPlot <- merge (merge (merge (FiltClust_To_DataTable %>%
+  mutate (order = ORDER[match (Muscle, names (ORDER))]) %>%
+    group_by (Individual, Muscle, Sample, order) %>% 
+    filter (Filt1_4_disH02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+    count (Filt1_4_disH02, name = "1_4_dis") %>%
+    group_by (Individual, Muscle) %>%
+    mutate (per.n_Filt1_4_dis = `1_4_dis` / (sum (`1_4_dis`))) %>%
+    dplyr::rename (Clusters = Filt1_4_disH02), 
+  FiltClust_To_DataTable %>%
+    group_by (Individual, Muscle, Sample) %>%
+    filter (Filt1_4H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+    count (Filt1_4H02, name = "1_4") %>%
+    group_by (Individual, Muscle) %>%
+    mutate (per.n_Filt1_4 = `1_4` / (sum (`1_4`))) %>%
+    dplyr::rename (Clusters = Filt1_4H02)), 
+  FiltClust_To_DataTable %>%
+    group_by (Individual, Muscle, Sample) %>%
+    filter (Filt1_3H02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+    count (Filt1_3H02, name = "1_3") %>%
+    group_by (Individual, Muscle) %>%
+    mutate (per.n_Filt1_3 = `1_3` / (sum (`1_3`))) %>%
+    dplyr::rename (Clusters = Filt1_3H02)), 
+  FiltClust_To_DataTable %>%
+    group_by (Individual, Muscle, Sample) %>%
+    filter (NoFiltH02 %in% c ("MyHC1", "MyHC2A", "MyHC2X", "NoneFiber", "OtherCluters")) %>%
+    count (NoFiltH02, name = "NoF") %>%
+    group_by (Individual, Muscle) %>%
+    mutate (per.n_NoFilter = NoF / (sum (NoF))) %>%
+    dplyr::rename (Clusters = NoFiltH02), all.x = T)
+  
+ToPlot <- merge (ToPlot, SubsetToPlot, by = c ("Individual", "Muscle"))
+
+P1 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2A"), aes(x = M.7, y = per.n_Filt1_3*100)) +
+  geom_point (size = 1.5, col = "#CC3333") +
+  geom_smooth (method = lm, colour = "black") + stat_cor (method = "pearson") + theme_bw () +
+  labs (y = "%Myofibers in cluster 1", x = "M.7's eigenvector") +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (size = 10, vjust = 0.5, hjust = 1),
+         axis.ticks = element_blank (), legend.text = element_text ( size = 12, vjust = 0.5),
+         strip.text = element_text (size = 12, face = "bold"), legend.position = "none")
+P2 <- ggplot (ToPlot %>% filter (Clusters == "MyHC1"), aes(x = M.7, y = per.n_Filt1_3*100)) +
+  geom_point (size = 1.5, col = "#0066CC") +
+  geom_smooth (method = lm, colour = "black") + stat_cor (method = "pearson") + theme_bw () +
+  labs (y = "%Myofibers in cluster 2", x = "M.7's eigenvector") +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (size = 10, vjust = 0.5, hjust = 1),
+         axis.ticks = element_blank (), legend.text = element_text ( size = 12, vjust = 0.5),
+         strip.text = element_text (size = 12, face = "bold"), legend.position = "none")
+P3 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2X"), aes(x = M.7, y = per.n_Filt1_3*100)) +
+  geom_point (size = 1.5, col = "#339966") + 
+  geom_smooth (method = lm, colour = "black") + stat_cor (method = "pearson", ) + theme_bw () + 
+  labs (y = "%Myofibers in cluster 3", x = "M.7's eigenvector") +
+  theme (panel.grid = element_blank (), 
+         axis.text.x = element_text (size = 10, vjust = 0.5, hjust = 1),
+         axis.ticks = element_blank (), legend.text = element_text ( size = 12, vjust = 0.5),
+         strip.text = element_text (size = 12, face = "bold"), legend.position = "none")
+(Tosave <- plot_grid (P1, P2, P3, hjust = 0, vjust = 1, ncol = 3))
+ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 6, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Myofibertype_M.7.tif")
+```
+
+```{r}
+sessionInfo ()
+```
