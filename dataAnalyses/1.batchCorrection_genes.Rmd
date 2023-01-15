@@ -68,8 +68,8 @@ In ComBat-Seq, we can specify biological covariates, whose signals will be prese
 passedQC <- unlist(read.table("inputs/sampleListPassedQualityControl.txt", as.is = TRUE), use.names = FALSE)
 
 # Reading the count-data
-HTseqCount <- read.csv("inputs/countTables/primarySecuencingFragmentsPerGene", sep = "\t")
-reSeqHTseqCount <- read.csv("inputs/countTables/reSecuencingFragmentsPerGene", sep = "\t")
+HTseqCount <- read.csv("inputs/countTables/primarySequencingFragmentsPerGene", sep = "\t")
+reSeqHTseqCount <- read.csv("inputs/countTables/reSequencingFragmentsPerGene", sep = "\t")
 
 HTseqCount <- merge(HTseqCount, reSeqHTseqCount) %>% 
   filter(grepl("ENSG", feature)) %>% # removing extra rows
