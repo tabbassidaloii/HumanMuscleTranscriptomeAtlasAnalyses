@@ -16,9 +16,9 @@ if(!"dplyr" %in% installed.packages())install.packages("dplyr")
 if(!"tibble" %in% installed.packages())install.packages("tibble")
 if(!"ggplot2" %in% installed.packages())install.packages("ggplot2")
 if(!"scales" %in% installed.packages())install.packages("scales")
-if(!"limma" %in% installed.packages())install.packages("limma")
-if(!"edgeR" %in% installed.packages())install.packages("edgeR")
 if(!require("BiocManager", quietly = TRUE))install.packages("BiocManager")
+if(!"limma" %in% installed.packages())BiocManager::install("limma")
+if(!"edgeR" %in% installed.packages())BiocManager::install("edgeR")
 if(!"biomaRt" %in% installed.packages())BiocManager::install("biomaRt")
 if(!"knitr" %in% installed.packages())install.packages("knitr")
 if(!"factoextra" %in% installed.packages())install.packages("factoextra")
@@ -692,7 +692,6 @@ ggsave(Tosave_VarPart_BatchMus, device = "tiff", units = "cm", width = 10, heigh
 This plot shows that the biological factors have a high contribution in the variation. 
 The individual factor shows the highest contribution. However, we should remember that other hidden technical factors could be also involved in the variation accounted for individual(the operation time/day, the differences in how fast samples were snap-freezed after the operation, ...).
 The library preparation batch is the most important technical source of variation in the not corrected data but as expected its effect has been eliminated by batch effect correction.
-
 
 ```{r}
 sessionInfo()

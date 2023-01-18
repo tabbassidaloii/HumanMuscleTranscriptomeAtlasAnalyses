@@ -1,0 +1,282 @@
+---
+title: "DE analysis for genes"
+output:
+  html_notebook: default
+  word_document: default
+editor_options:
+  chunk_output_type: console
+  always_allow_html: true
+---
+
+'Note:' The muscle abbreviations were GRA(for Gracilis), SED(semitendinosus distal),  SEM(semitendinosus middle)), GAL(gastrocnemius lateralis), REF(rectus femoris), VAM(vastus medialis) and VAL(vastus lateralis) in all the analyses(scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots(shown in the publication).
+
+```{r setup, include = FALSE}
+rm(list = ls())
+if(!require("BiocManager", quietly = TRUE))install.packages("BiocManager")
+if(!"limma" %in% installed.packages())BiocManager::install("limma")
+if(!"edgeR" %in% installed.packages())BiocManager::install("edgeR")
+if(!"lmerTest" %in% installed.packages())install.packages("lmerTest")
+if(!"lsmeans" %in% installed.packages())install.packages("lsmeans")
+if(!"dplyr" %in% installed.packages())install.packages("dplyr")
+if(!"tibble" %in% installed.packages())install.packages("tibble")
+if(!"knitr" %in% installed.packages())install.packages("knitr")
+if(!"ggplot2" %in% installed.packages())install.packages("ggplot2")
+
+suppressPackageStartupMessages({ 
+  library(edgeR)
+  library(limma)
+  library(lmerTest)
+  library(lsmeans)
+  library(dplyr)
+  library(tibble)
+  library(knitr)
+  library(ggplot2)
+  })
+
+opts_chunk$set(eval = TRUE, echo = TRUE, tidy = TRUE, highlight = TRUE, dev = c('png'), fig.width = 10, fig.height = 8,  fig.path = "figures/")
+
+options(scipen = 999)
+
+col.muscle <- c("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999", 
+                "SED" = "#0033FF", "SEM" = "#0066FF", "VAL" = "#FF6666", 
+                "VAM" = "#FF3333")
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+# loading data
+load("outputs/correctedGeneDatasetToAnalysis.RData")
+```
+
+## Differential expression analysis
+We used the linear mixed models considering individual as a random effect, and muscle and batch as fixed effects.
+
+The lmer function form lmerTest R package is used. And to find if there is any diffrence between muscles or batches the anova is performed. For the pairwise comparison we used Least-Squares Means(lsmeants R function)
+
+```{r DEA, echo = FALSE, warning = FALSE}
+if(file.exists("outputs/DE/DEA_genes.RData")){
+  load("outputs/DE/DEA_genes.RData")} else{
+    # Creating a design matrix 
+    design <- model.matrix(~ group + individual, data = D_BatchMus$samples)
+    colnames(design) <- gsub("group|individual", "", colnames(design))
+    # mean-variance trend was removed using the voom
+    v_BatchMus <- voom(D_BatchMus, design, plot = TRUE)
+    DEtest_BatchMus <- matrix(data = NA, nrow = nrow(v_BatchMus$E), ncol = 140)
+    rownames(DEtest_BatchMus) <- rownames(v_BatchMus$E)
+    AllPossPairs <- combn(1 : length(names(col.muscle)), 2, simplify = FALSE)
+    colnames(DEtest_BatchMus)[112:140] <- c("AveExpr", paste0("AveExpr", sort(names(col.muscle))),
+                                            paste0("Log2FC_", unlist(lapply(AllPossPairs, function(x) 
+                                              paste(names(col.muscle[x]), collapse = "_"))))) 
+    DEfixef_BatchMus <-  matrix(data = NA, nrow = nrow(v_BatchMus$E), ncol = 7)
+    rownames(DEfixef_BatchMus) <- rownames(v_BatchMus$E)
+    # fit linear-mixed model for each gene (including individual as random and all factors as fixed effects)
+    # RIN is excluded as we have missing value for 12 samples
+    
+    for(gene in 1:nrow(v_BatchMus$E)){
+      # Data
+      DE.Data <- cbind(v_BatchMus$E[gene,], v_BatchMus$weights[gene,], v_BatchMus$targets)
+      colnames(DE.Data)[1:2]<- c("values", "weights")
+      # fit LMM
+      MM <- lmerTest::lmer(values ~ group +(1|individual), weights = weights, data = DE.Data) 
+      # Muscle
+      # Pairwise comparison 
+      PairWiseComp <- as.data.frame(lsmeans::lsmeans(MM, pairwise ~ group)$contrast)
+      PairWiseComp <- reshape2::melt(PairWiseComp, id = "contrast"); 
+      PairWiseComp <- PairWiseComp[order(PairWiseComp$contrast),]
+      DEtest_BatchMus[gene, 1:111] <- c(unlist(anova(MM)["group",]), PairWiseComp$value)
+      # Extract the fixed-effect coefficients using fixef()
+      DEfixef_BatchMus[gene,] <- lme4::fixef(MM)
+      # Average expression
+      DEtest_BatchMus[gene, 112] <- mean(DE.Data$values)
+      # Average for muscle
+      meanMus <- data.frame(DE.Data %>% group_by(group) %>% summarise(mean(values)))
+      meanMus <- meanMus[sort(meanMus$group),]
+      DEtest_BatchMus[gene, c(113:119)] <- meanMus[sort(meanMus$group), 2]
+      # Log2FC
+      logFC <- c()
+      for(i in 1:length(AllPossPairs)){
+        p <- AllPossPairs[[i]]
+        logFC[i] <- meanMus[p[1],2] - meanMus[p[2],2]
+      }
+      DEtest_BatchMus[gene, c(120:140)] <- logFC
+    }
+    DEtest_BatchMus <- as.data.frame(DEtest_BatchMus)
+    colnames(DEtest_BatchMus)[1:111] <- c(colnames(anova(MM)["group",]), 
+                                          paste(PairWiseComp$contrast, PairWiseComp$variable))
+    DEfixef_BatchMus <- as.data.frame(DEfixef_BatchMus)
+    colnames(DEfixef_BatchMus) <- names(lme4::fixef(MM))
+    # I see to warning messages:
+    ##(1) boundary(singular) fit: see ?isSingular
+    # We have this warning when the Std.Dev. for random effect is equal to zero
+    #(https://bbolker.github.io/mixedmodels-misc/glmmFAQ.html#singular-models-random-effect-variances-estimated-as-zero-or-correlations-estimated-as---1)
+    ##(2) In checkConv(attr(opt, "derivs"), opt$par, ctrl = control$checkConv,  :
+    ##Model failed to converge with max|grad| = 0.0033159(tol = 0.002, component 1)
+    # We have this warning when the random effect(individual) is explaining everything and leaving novariation at all for either any fixed effect or the residual variance.
+    #(https://stackoverflow.com/questions/53034261/warning-lme4-model-failed-to-converge-with-maxgrad)
+
+    DEtest_BatchMus$`FDR(>F)` <- p.adjust(DEtest_BatchMus[,"Pr(>F)"], method = "fdr")
+    
+    # Saving the dataset for the analysis
+    save(v_BatchMus, DEtest_BatchMus, DEfixef_BatchMus, file = "outputs/DE/DEA_genes.RData")
+  }
+rm(list = setdiff(ls(), c("v_BatchMus", "D_BatchMus", "DEtest_BatchMus", "DEfixef_BatchMus", "col.muscle")))
+```
+
+### The muscle effect
+The anova is used to find the genes that show different expression levels considering the muscle type as covariate.
+```{r DEmuscle, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 5, fig.width = 5}
+# Subsetting the differentially expressed genes
+DEtestSig <- DEtest_BatchMus %>% tibble::rownames_to_column() %>%
+  filter(`FDR(>F)` < 0.05) %>%
+  arrange(`FDR(>F)`) %>%
+  tibble::column_to_rownames("rowname") 
+print("Number of DE genes") 
+nrow(DEtestSig)
+```
+
+We use lsmeans to have pairwise comparison between muscles(muscle type is the the covariate).
+There are 21 different pairwise comparisons. In the below table, the first column is the number of pairwise comparison that the gene is deferentially expressed and the second column is the number of genes  
+
+```{r DEmusclePairwise, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 5, fig.width = 5}
+print(knitr::kable(data.frame(table(rowSums(DEtestSig[, grep("p.val", colnames(DEtestSig))]< 0.05)))))
+```
+
+The below plot shows the number of differentially expressed genes(FDR < 0.05) in the pairwise comparisons of all the muscles.
+The color intensity indicates the number of DE genes(the darker the color, the higher the number).
+
+```{r DEmuscleTable, echo = FALSE, warning = FALSE, message = FALSE}
+# Counting the number of differentially expressed genes in each pairwise comparisons
+ColPVAl <- colnames(DEtest_BatchMus)[grep(" p.value", colnames(DEtest_BatchMus))]
+MusDissSim <- matrix(0, nrow = 7, ncol = 7) 
+colnames(MusDissSim) <- rownames(MusDissSim) <- names(col.muscle) 
+for(c in ColPVAl){
+  MusDissSim[gsub(".*- | p.*", "", c), gsub(" -.*", "", c)] <- MusDissSim[gsub(" -.*", "", c), gsub(".*- | p.*", "", c)] <- table(DEtestSig[c]< 0.05)["TRUE"]*100/nrow(DEtest_BatchMus)
+}
+MusDissSim[ is.na(MusDissSim)] = 0
+```
+
+
+```{r DEmusclePlots1, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 5, fig.width = 5}
+# New Abbreviations
+muscleAbbreviation <- c("GAL" = "GL", "GRA" = "GR", "VAL" = "VL", "VAM" = "VM", "SED" = "STD", "SEM" = "STM", "REF" = "RF")
+colnames(MusDissSim) <- muscleAbbreviation[match(colnames(MusDissSim), names(muscleAbbreviation))]
+rownames(MusDissSim) <- muscleAbbreviation[match(rownames(MusDissSim), names(muscleAbbreviation))]
+
+(Tosave <- pheatmap::pheatmap(MusDissSim, 
+                              color = colorRampPalette(c("white", "gray"))(10),
+                              scale = "none", number_format = "%.1f", 
+                              cluster_cols = T, cluster_rows = T, 
+                              fontsize = 12, key =F, angle_col = 90, 
+                              legend_breaks = c(0, 5, 10, 15, 20),
+                              display_numbers = T, na_col = "white"))
+ggsave(Tosave, device = "tiff", units = "cm", width = 10, height = 7, filename = "figures/DE_genes.tif")
+
+# Removing cell type related genes
+load("outputs/cellTypeComposition/geneCellTypesEigengeneCor.RData")
+geneCellTypeRelated <- unique(unlist(SigGenesCellTypes))
+DEtestSigNotCellRelated <- DEtestSig[!rownames(DEtestSig) %in% geneCellTypeRelated,]
+
+# Counting the proportion of differentially expressed genes (not cell type related) in each pairwise comparisons
+ColPVAl <- colnames(DEtest_BatchMus)[grep(" p.value", colnames(DEtest_BatchMus))]
+MusDissSim <- matrix(0, nrow = 7, ncol = 7) 
+colnames(MusDissSim) <- rownames(MusDissSim) <- names(col.muscle) 
+for(c in ColPVAl){
+  MusDissSim[gsub(".*- | p.*", "", c), gsub(" -.*", "", c)] <- MusDissSim[gsub(" -.*", "", c), gsub(".*- | p.*", "", c)] <- table(DEtestSigNotCellRelated[c]< 0.05)["TRUE"]*100/nrow(DEtest_BatchMus)
+}
+MusDissSim[ is.na(MusDissSim)] = 0
+colnames(MusDissSim) <- muscleAbbreviation[match(colnames(MusDissSim), names(muscleAbbreviation))]
+rownames(MusDissSim) <- muscleAbbreviation[match(rownames(MusDissSim), names(muscleAbbreviation))]
+
+(Tosave <- pheatmap::pheatmap(MusDissSim, 
+                              color = colorRampPalette(c("white", "gray"))(10),
+                              scale = "none", number_format = "%.1f", 
+                              cluster_cols = T, cluster_rows = T, 
+                              fontsize = 12, key =F, angle_col = 90, 
+                              legend_breaks = c(4, 8, 12, 16),
+                              display_numbers = T, na_col = "white"))
+ggsave(Tosave, device = "tiff", units = "cm", width = 10, height = 7, filename = "figures/DE_genes_not_cell_type related.tif")
+```
+
+The GAL is the most different muscle.
+The VAM, REF and VAL are similar and clustered together and GRA, SEM and SED are also more similar as they also cluster together.
+
+```{r DEsummary1, echo = FALSE, warning = FALSE, message = FALSE}
+# Summary of DE results
+contrasts <- gsub(" p.value", "", colnames(DEtest_BatchMus)[grep("p.value",colnames(DEtest_BatchMus))])
+for(i in contrasts){
+  M1 <- gsub(" -.*", "", i)
+  M2 <- gsub(".*- ", "", i)
+  LogCol <- colnames(DEtest_BatchMus)[grep(paste0("Log2FC", "_", M1, "_", M2),colnames(DEtest_BatchMus))]
+  PvalCol <- colnames(DEtest_BatchMus)[grep(paste0(i, " p.value"),colnames(DEtest_BatchMus))]
+  HigherInM1 <- rownames(DEtestSig[DEtestSig[PvalCol] < 0.05 & DEtestSig[LogCol] > 0,])
+  HigherInM2 <- rownames(DEtestSig[DEtestSig[PvalCol] < 0.05 & DEtestSig[LogCol] < 0,])
+  assign(paste0("HigherIn", M1, "than", M2), HigherInM1)
+  assign(paste0("HigherIn", M2, "than", M1), HigherInM2)
+  rm(HigherInM1, HigherInM2)
+}
+
+summaryDETbale <- data.frame(Comparison = ls(pattern = paste0("HigherIn.*", "$")),
+                             NoGenes = unlist(lapply(ls(pattern = paste0("HigherIn.*", "$")),
+                                                     function(x) length(get(x)))))
+print(knitr::kable(head(summaryDETbale)))
+```
+
+Below plot visualizes the overlap of higher expressed genes than any other muscles.
+There are many genes that are only higher in GAL than one or more other muscles
+```{r musclePlots2, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 6, fig.width = 6}
+# Genes higher expressed in each muscle in comparison with any other muscle
+for(Mus in names(col.muscle)){
+    GenesHighInMus <- unique(unlist(lapply(ls(pattern = paste0("HigherIn", Mus, ".*", "$")), get)))
+    assign(paste0("GenesHighIn", Mus), GenesHighInMus)
+    rm(GenesHighInMus)
+}
+
+# Genes that are higher at least in one muscle
+GenesHigh <- unique(unlist(lapply(ls(pattern = paste0("GenesHighIn.*", "$")), get)))
+AllSets <- matrix(0, ncol = 7, nrow = length(GenesHigh))
+rownames(AllSets) <- GenesHigh
+colnames(AllSets) <- ls(pattern = paste0("GenesHighIn.*", "$"))
+for(set in ls(pattern =  paste0("GenesHighIn.*", "$"))){
+  AllSets[,set] <- ifelse(rownames(AllSets) %in% get(set), 1, 0)
+}
+
+pheatmap::pheatmap(AllSets, color = c("grey", "darkblue"),
+                   legend = F, show_rownames = F, treeheight_row = 0)
+```
+  
+### Heatmap of log-CPM values for 1000 top differentially expressed genes
+```{r musclePlots4, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 14, fig.width = 7}
+# Heatmap for top DE genes 
+# Get the genes for the top 1000 most DE genes
+HighDE <- rownames(DEtestSig[order(DEtestSig$`FDR(>F)`),])[1:1000]
+# Subset matrix
+lcpm <- cpm(D_BatchMus, log = T)
+hmDat <- lcpm[HighDE,]
+# Set the colors
+col.batch <- c("1" = "#e6194B", "2" = "#3cb44b", "3" = "#4363d8", "4" = "#911eb4", "5" = "black")
+BatchColPlot <- col.batch[match(D_BatchMus$samples$batch[match(colnames(D_BatchMus), 
+                                                               rownames(D_BatchMus$samples))], 
+                                names(col.batch))]
+MusColPlot <- col.muscle[match(gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(D_BatchMus)), 
+                                  names(col.muscle))]
+col.individual <- c("MD06" = "#A6CEE3", "MD07" = "#1F78B4", "MD08" = "#B2DF8A", 
+                     "MD10" = "#33A02C", "MD11" = "#FB9A99", "MD12" = "#E31A1C", 
+                     "MD13" = "#FDBF6F", "MD14" = "#FF7F00", "MD15" = "#66C2A5", 
+                     "MD16" = "#FC8D62", "MD17" = "#8DA0CB", "MD18" = "#E78AC3", 
+                     "MD19" = "#A6D854", "MD20" = "#FFD92F", "MD21" = "#E5C494", 
+                     "MD22" = "#B3B3B3", "MD26" = "#1B9E77", "MD27" = "#D95F02", 
+                     "MD28" = "#7570B3", "MD31" = "#E7298A")
+IndColPlot <- col.individual[match(gsub("_.*", "", colnames(D_BatchMus)), 
+                                  names(col.individual))]
+myCols <- cbind(BatchColPlot, MusColPlot, IndColPlot)
+colnames(myCols) <- c("Batch", "Muscle", "Individual")
+# Plot the heatmap
+heatmap3::heatmap3(hmDat, ColSideColors = myCols,
+              labCol = gsub("_Sam.*", "", colnames(hmDat)), 
+              main = "Top 1000 DE genes", 
+              labRow = FALSE, scale = "row",
+              col =   gplots::colorpanel(1000, "blue", "white", "red"),
+              margins = c(5,1), Rowv = T, showRowDendro = F)
+```
+
+```{r}
+sessionInfo()
+```

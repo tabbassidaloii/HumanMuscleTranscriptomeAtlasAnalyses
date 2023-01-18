@@ -14,11 +14,13 @@ editor_options:
 ```{r setup, include = FALSE}
 rm(list = ls())
 if(!"dplyr" %in% installed.packages())install.packages("dplyr")
-if(!"limma" %in% installed.packages())install.packages("limma")
-if(!"edgeR" %in% installed.packages())install.packages("edgeR")
+if(!require("BiocManager", quietly = TRUE))install.packages("BiocManager")
+if(!"limma" %in% installed.packages())BiocManager::install("limma")
+if(!"edgeR" %in% installed.packages())BiocManager::install("edgeR")
 if(!"ggplot2" %in% installed.packages())install.packages("ggplot2")
 if(!"lsmeans" %in% installed.packages())install.packages("lsmeans")
 if(!"RColorBrewer" %in% installed.packages())install.packages("RColorBrewer")
+if(!"WGCNA" %in% installed.packages())install.packages("WGCNA")
 
 suppressPackageStartupMessages({ 
   library(dplyr)
@@ -27,14 +29,14 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(lsmeans)
   library(RColorBrewer)
+  library(WGCNA)
   })
 opts_chunk$set(eval = TRUE, echo = TRUE, tidy = TRUE, highlight = TRUE, dev = c('png'), fig.width = 10, fig.height = 8,  fig.path = "figures/")
 
-
 # Colors
 col.muscle <- c("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999", 
-                 "SED" = "#0033FF", "SEM" = "#0066FF", "VAL" = "#FF6666", 
-                 "VAM" = "#FF3333")
+                "SED" = "#0033FF", "SEM" = "#0066FF", "VAL" = "#FF6666", 
+                "VAM" = "#FF3333")
 
 setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 Data <- new.env(); load("outputs/correctedGeneDatasetToAnalysis.RData", envir = Data)
@@ -63,7 +65,7 @@ colnames(CellTypesEigengene) <- CellTypes
 for(cell in CellTypes){
   GeneMarkers <- data.frame(hgnc_symbol = markers$hgnc_symbol.hg38[markers$`Cell-type`== cell]) %>%
     mutate(ensembl_gene_id = markers$ensembl_gene_id.hg38[markers$`Cell-type`== cell])
-  Subset <- v_BatchMus$E[rownames(v_BatchMus$E) %in% GeneMarkers$ensembl_gene_id, ]
+  Subset <- v_BatchMus$E[rownames(v_BatchMus$E) %in% GeneMarkers$ensembl_gene_id,]
   rownames(Subset) <- GeneMarkers$hgnc_symbol[match(rownames(Subset), GeneMarkers$ensembl_gene_id)]
   
   Eigengenes <- WGCNA::moduleEigengenes(t(Subset), rep("black", nrow(Subset)))$eigengenes
@@ -87,7 +89,7 @@ for(com in 1:nrow(COMBIN)){
 }
 
 colnames(CellTypeOverlappingGenes) <- rownames(CellTypeOverlappingGenes) <- paste0(colnames(CellTypeOverlappingGenes), "(", table(markers$`Cell-type`)[match(colnames(CellTypeOverlappingGenes), names(table(markers$`Cell-type`)))], " genes)")
-print(ggplot(subset(reshape2::melt(CellTypeOverlappingGenes)[lower.tri(CellTypeOverlappingGenes), ], 
+print(ggplot(subset(reshape2::melt(CellTypeOverlappingGenes)[lower.tri(CellTypeOverlappingGenes),], 
                 Var1 != Var2), 
         aes(x = Var1, y = Var2, fill = value)) +
   geom_tile(aes(fill = value), colour = "white") +
@@ -102,7 +104,7 @@ print(ggplot(subset(reshape2::melt(CellTypeOverlappingGenes)[lower.tri(CellTypeO
   scale_y_discrete(position = 'right'))
 ```
 
-# Anova test on the eigengene values for each cell type
+## Anova test on the eigengene values for each cell type
 We have checked whether the differences are significant across muscles.
 
 ```{r cellTypeTest, message = FALSE, warning = FALSE, echo = FALSE, fig.height = 18, fig.width = 18}
@@ -119,7 +121,7 @@ for(cell in colnames(CellTypesEigengeneToAnova)[-c(1:3)]) {
   
   PairWiseComp <- as.data.frame(lsmeans::lsmeans(MM, pairwise ~ group)$contrasts)[c("contrast", "p.value", "t.ratio")] %>%
     arrange(contrast)
-  AnovaTest[cell, ] <- c(anova(MM)$`Pr(>F)`, PairWiseComp$p.value, PairWiseComp$t.ratio)
+  AnovaTest[cell,] <- c(anova(MM)$`Pr(>F)`, PairWiseComp$p.value, PairWiseComp$t.ratio)
 }
 
 
@@ -236,6 +238,46 @@ ggplot(CellTypesEigengeneToPlot, aes(x = forcats::fct_reorder(Muscle, order), y 
          strip.text = element_text(size = 12, face = "bold"), legend.position = "none") + 
   labs(y = "Eigenvalue of cell type specific gene markers", x = element_blank())
 
+```
+
+## Gene and cell type association
+
+```{r geneCellTypeCor, message = FALSE, warning = FALSE, echo = FALSE}
+if(file.exists("outputs/cellTypeComposition/geneCellTypesEigengeneCor.RData"))
+  {load("outputs/cellTypeComposition/geneCellTypesEigengeneCor.RData")} else {
+    # Calculation the correlation and the p-value
+    GeneCellCor <- matrix(NA, nrow = nrow(v_BatchMus$E), ncol = ncol(CellTypesEigengene))
+    colnames(GeneCellCor) <- colnames(CellTypesEigengene)
+    rownames(GeneCellCor) <- rownames(v_BatchMus$E)
+    GeneCellCorPval <- GeneCellCor 
+    for(gene in rownames(v_BatchMus$E)){
+      for(cell in colnames(CellTypesEigengene)){
+        if(all(names(v_BatchMus$E[gene,]) == names(CellTypesEigengene[, cell]))){
+          GeneCellCor[gene, cell] <- cor(v_BatchMus$E[gene,], CellTypesEigengene[, cell])
+          GeneCellCorPval[gene, cell] <- cor.test(v_BatchMus$E[gene,], CellTypesEigengene[, cell])$p.value
+        }
+      }
+    }
+    # Calculating the adjusted p-value
+    GeneCellCorAdj <- GeneCellCorPval
+    for(cell in colnames(GeneCellCorPval)){
+      GeneCellCorAdj[, cell] <- round(p.adjust(GeneCellCorPval[, cell], method = "fdr"), 5)
+    }
+    GeneCellCorAdj <- as.data.frame(GeneCellCorAdj, as.is = T)
+    GeneCellCor <- as.data.frame(GeneCellCor, as.is = T)
+    
+    # Subsetting the significant(FDR < 0.05) and moderate relationship(abs(cor) > 0.5)
+    SigGenesCellTypes <- c()
+
+    for(i in 1:ncol(GeneCellCorAdj)){
+      AdjFilter <- rownames(GeneCellCorAdj[i] %>% filter(.[[1]] < 0.05))
+      PosCorFilter <- rownames(GeneCellCor[i] %>% filter(.[[1]] >= 0.5))
+      SigGenesCellTypes[[paste0(colnames(GeneCellCorAdj)[i], "(PosCor)")]] <- intersect(AdjFilter, PosCorFilter)
+    }
+    
+    kable(sapply(SigGenesCellTypes, length)) 
+    save(GeneCellCor, GeneCellCorPval, GeneCellCorAdj, SigGenesCellTypes, file = "outputs/cellTypeComposition/geneCellTypesEigengeneCor.RData")
+  }
 ```
 
 ```{r}
