@@ -1,0 +1,567 @@
+---
+title: "WGCNA"
+author:
+- tabbassidaloii
+output:
+ md_document:
+    variant: markdown_github
+always_allow_html: yes
+editor_options:
+  chunk_output_type: console
+---
+
+'Note:' The muscle abbreviations were GRA(for Gracilis), SED(semitendinosus distal),  SEM(semitendinosus middle)), GAL(gastrocnemius lateralis), REF(rectus femoris), VAM(vastus medialis) and VAL(vastus lateralis) in all the analyses(scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots(shown in the publication).
+
+```{r setup, include = FALSE}
+rm(list = ls())
+if(!"limma" %in% installed.packages())BiocManager::install("limma") 
+if(!"edgeR" %in% installed.packages())BiocManager::install("edgeR") 
+if(!"WGCNA" %in% installed.packages())BiocManager::install("WGCNA") 
+if(!"flashClust" %in% installed.packages())install.packages("flashClust")
+if(!"dplyr" %in% installed.packages())install.packages("dplyr")
+if(!"readxl" %in% installed.packages())install.packages("readxl")
+
+suppressPackageStartupMessages({ 
+  library(WGCNA)
+  library(flashClust)  
+  library(dplyr)
+  library(readxl)
+  })
+opts_chunk$set(eval = TRUE, echo = TRUE, tidy = TRUE, highlight = TRUE, dev = c('png'), fig.width = 10, fig.height = 8,  fig.path = "figures/")
+
+BiocStyle::markdown()
+options(scipen = 999)
+
+# Loading the data
+Data <- new.env(); load("outputs/correctedGeneDatasetToAnalysis.RData", envir = Data)
+D_BatchMus <- Data$D_BatchMus
+# Creating a design matrix
+design <- model.matrix(~ group + individual, data = D_BatchMus$samples)
+colnames(design) <- gsub("group|individual", "", colnames(design))
+# mean-variance trend was removed using the voom
+v_BatchMus <- voom(D_BatchMus, design, plot = TRUE)
+
+# Set colors
+col.muscle <- c("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999", 
+                "SED" = "#0033FF", "SEM" = "#0066FF", "VAL" = "#FF6666",  
+                "VAM" = "#FF3333")
+MusColPlot <- col.muscle [match(gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(D_BatchMus)), names(col.muscle))]
+col.batch <- c("1" = "#e6194B", "2" = "#3cb44b", "3" = "#4363d8", "4" = "#911eb4", "5" = "black")
+BatchColPlot <- col.batch [match(D_BatchMus$samples$batch [match(colnames(D_BatchMus), rownames(D_BatchMus$samples))], names(col.batch))]
+col.individual <- c("MD06" = "#A6CEE3", "MD07" = "#1F78B4", "MD08" = "#B2DF8A", 
+                     "MD10" = "#33A02C", "MD11" = "#FB9A99", "MD12" = "#E31A1C", 
+                     "MD13" = "#FDBF6F", "MD14" = "#FF7F00", "MD15" = "#66C2A5", 
+                     "MD16" = "#FC8D62", "MD17" = "#8DA0CB", "MD18" = "#E78AC3", 
+                     "MD19" = "#A6D854", "MD20" = "#FFD92F", "MD21" = "#E5C494", 
+                     "MD22" = "#B3B3B3", "MD26" = "#1B9E77", "MD27" = "#D95F02", 
+                     "MD28" = "#7570B3", "MD31" = "#E7298A")
+IndColPlot <- col.individual [match(gsub("_.*", "", colnames(D_BatchMus)), names(col.individual))]
+col.lane <- c("L003.1" = "lightblue", "L004.1" = "darkblue", "L002.2" = "pink", "L004.2" = "red")
+LaneColPlot <- col.lane [match(D_BatchMus$samples$lane [match(colnames(D_BatchMus), rownames(D_BatchMus$samples))], names(col.lane))]
+col.RNA <- c("WithKit" = "#bfef45", "WithOutKit" = "#f58231")
+RNAColPlot <- col.RNA [match(D_BatchMus$samples$IsolationRNA [match(colnames(D_BatchMus), rownames(D_BatchMus$samples))], names(col.RNA))]
+col.Hos <- c("EMC" = "green", "HMC" = "orange")
+HosColPlot <- col.Hos [match(D_BatchMus$samples$Hospital [match(colnames(D_BatchMus), rownames(D_BatchMus$samples))], names(col.Hos))]
+```
+
+## Gene coexpression network analysis
+### Finding the outlier samples using Eucidian distance
+```{r OutlierSample, message = FALSE, warning = FALSE, fig.width = 14}
+# show that row names agree	
+all(rownames(v_BatchMus$targets) == colnames(v_BatchMus$E)) 	
+# sample network based on squared Euclidean distance	
+# note that data should be transposed 	
+A <- WGCNA::adjacency(v_BatchMus$E, type = "distance", corFnc = WGCNA::cor)	
+# this calculates the whole network connectivity	
+k <- as.numeric(apply(A, 2, sum)) - 1	
+# standardized connectivity	
+Z.k <- scale(k)	
+# Designate samples as outlying	
+# if their Z.k value is below the threshold	
+thresholdZ.k <- -2.5 # often -2.5	
+# the color vector indicates outlyingness(red)	
+outlierColor <- ifelse(Z.k < thresholdZ.k, "red", "black")	
+# calculate the cluster tree using flahsClust or hclust	
+sampleTree <- flashClust(as.dist(1 - A), method = "average")	
+# Convert traits to a color representation where red indicates high values	
+traitColors <- data.frame(Muscle = MusColPlot,
+                           Individual = IndColPlot,
+                           Hospital = HosColPlot,
+                           RNAprotocol = RNAColPlot, 
+                           Batch = BatchColPlot,
+                           Lane = LaneColPlot)
+
+traitColors <- cbind(traitColors, data.frame(numbers2colors(sapply(v_BatchMus$targets %>% dplyr::select("lib.size", "RIN", "Concen.", "age"), as.numeric), signed = FALSE)))
+dimnames(traitColors) [[2]][7:10] <- c("LibSize", "RIN", "Concen.", "Age")
+datColors <- data.frame(outlierC = outlierColor, traitColors)	
+# Plot the sample dendrogram and the colors underneath. 	
+plotDendroAndColors(sampleTree, dendroLabels = gsub("_Sam.*", "",colnames(v_BatchMus$E)), groupLabels = names(datColors), colors = datColors, main = "Sample dendrogram and trait heatmap")
+# Remove outlying samples from expression and phenotypic data	
+```
+
+In general the sample dendrogram (based on Euclidean distance) confirms our earlier observation, bigger inter-individual difference than the muscle differences!
+REF MD13 and VAM MD28 are detected as outlier samples but we don't need to exclude these samples since the dataset is big and these two samples will not have big effect on the network construction since the `corOptions = c("maxPOutliers = 0.1")` argument is also specified for the network construction.
+
+In addition, these two samples are not that far away form other samples looking at the PCA plots.
+
+### WGCNA in 5 steps (as explianed in Abbassi-Daloii, 2020, DOI: 10.1016/j.ygeno.2020.05.026)
+1. Calculating the dissimilarity matrix using 7 different powers(6, 8, 10, 12, 14, 18, 22)
+2. Detecting module using 3 settings for minClusterSize(15, 20, 30) and 3 settings for different deepSplit(0, 2, 4) 
+3. Merging modules using 5 settings for cutHeight(0.1, 0.15, 0.2, 0.25, 0.3)
+4. Defining co-expressed pairs(CPs)
+5. Defining knowledge pairs(KPs)
+6. Finding the overlap between KPs and CPs
+7. Creating settings summary file
+
+```{r WGCNA_power, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE}
+enableWGCNAThreads()
+## Choose a set of soft thresholding powers	
+powers <- c(c(1 : 10), seq(12, 30, 2))	
+# choose power based on SFT criterion	
+# conflict_prefer("cor", "WGCNA")
+# conflict_prefer("which.max", "raster")
+# conflict_prefer("filter", "dplyr")
+# conflict_prefer("paste", "base")
+sft <- pickSoftThreshold(t(v_BatchMus$E), powerVector = powers, corFnc = bicor, 	
+                           corOptions = c("maxPOutliers = 0.1"), networkType = "signed hybrid")	
+# Plot the results: 	
+par(mar = c(5, 4, 4, 2) + 0.1, mfrow = c(1, 2))	
+# SFT index as a function of different powers	
+plot(sft$fitIndices [, 1], - sign(sft$fitIndices [, 3]) * sft$fitIndices [, 2] ,	
+       xlab = "Soft Threshold(power)", ylab = "Scale Free Topology Model Fit, signed R^2", type = "n", 
+       main = "Scale independence")	
+text(sft$fitIndices [, 1], - sign(sft$fitIndices [, 3]) * sft$fitIndices [, 2] ,	
+labels = powers, col = "red")	
+# R^2 cut-off	
+abline(h = 0.8, col = "blue")	
+# Mean connectivity as a function of different powers	
+plot(sft$fitIndices [, 1], sft$fitIndices [, 5], type = "n", 	
+       xlab = "Soft Threshold(power)", ylab = "Mean Connectivity", main = "Mean connectivity")
+text(sft$fitIndices [, 1], sft$fitIndices [, 5], labels = powers, col = "red")	
+```
+
+The Powers that we selected for the network construction all have R2 above 0.8
+
+```{r AllStepsWGCNA1, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE}
+# 1. Adjacency and dissTOM
+mainDir = "outputs/WGCNA/"
+subDir = "dissTOM"
+if(!file.exists(mainDir, subDir)) dir.create(file.path(mainDir, subDir), recursive = TRUE)
+if(length(list.files(paste0(mainDir, subDir))) == 0) {
+  # Create correlation matrix
+  A <- adjacency(t(v_BatchMus$E), power = 1, type = "signed hybrid", corFnc = "bicor", corOptions = c("maxPOutliers = 0.1"))
+  # change the default power value in adjacency function(WGCNA) to 1
+  adjacencyPower <- function(cor_mat, power) {abs(cor_mat) ^ power}
+  # Weighted adjacency matrix, using different powers:
+  power <- c(6, 8, 10, 12, 14, 18, 22)
+  # Parallel computing considering different powers
+
+  for(i in 1:length(power)) {
+      # Raised adjacency matrix to different powers 
+      Adjacency <- adjacencyPower(A, power = power[i])
+      save(Adjacency, file = paste0("outputs/WGCNA/Adjacency/AdjacencyPower", power[i], ".RData"))
+      # Define a dissimilarity based on the topological overlap
+      TOM <- WGCNA::TOMsimilarity(Adjacency, TOMType = "signed")
+      colnames(TOM) <- rownames(TOM) <- colnames(Adjacency)
+      dissTOM <- 1 - TOM
+      # Hierarchical gene clustering(according to the dissimilarity matrix)
+      geneTree <- flashClust::flashClust(as.dist(dissTOM), method = "average")
+      save(dissTOM, geneTree, file = paste0("outputs/WGCNA/dissTOM/dissTOMPower", power[i], ".RData"))
+      rm(Adjacency, TOM, dissTOM, geneTree)
+  }
+}
+
+# 2. Module Detection
+mainDir = "outputs/WGCNA/"
+subDir = "ModuleDetection"
+if(!file.exists(mainDir, subDir)) dir.create(file.path(mainDir, subDir), recursive = TRUE)
+if(length(list.files(paste0(mainDir, subDir))) == 0) {
+  filenames <- list.files("outputs/WGCNA/dissTOM/", full.names = T)
+  for(file in filenames){
+    args <-  c(9, file, 3, 15, 20, 30, 3, 0, 2, 4)
+    # loading dissimilarity matrix
+    power <- gsub("[^[:digit:],]", "", args[2])
+    load(args[2]) 
+    # Module detection
+    # Set the minimum module size 
+    args <- as.numeric(args[-2])
+    minModuleSize <- args[3 :(args[2] + 2)]
+    deepSplit <- args[7:(args[6] + 6)]
+    Combin <- expand.grid(minModuleSize, deepSplit)
+    print(Combin)
+    for(i in 1: nrow(Combin)) {
+      # Module detection by cutting branches
+      dynamicMods <- dynamicTreeCut::cutreeDynamic(dendro = geneTree, distM = dissTOM, method = "hybrid", 
+                                                      deepSplit = Combin[i, 2], pamRespectsDendro = FALSE,
+                                                      minClusterSize = Combin[i, 1])
+      # Convert labels to colors for plotting
+      dynamicColors <- WGCNA::labels2colors(dynamicMods)
+      # Calculate eigengenes(clustring modules based on expression similarities)
+      MEList <- WGCNA::moduleEigengenes(t(v_BatchMus$E), colors = dynamicColors)
+      MEs <- MEList$eigengenes
+      NAMES <- colnames(dissTOM)
+      save(dynamicColors, geneTree, NAMES, file = paste0("outputs/WGCNA/ModuleDetection/ModuleDetectionPower", power,
+                                                           "MinModuleSize", Combin[i, 1],
+                                                           "deepSplit", Combin[i, 2], ".RData"))
+    }
+  }
+}
+
+# 3. Merge Modules
+mainDir = "outputs/WGCNA/"
+subDir = "MergeModules"
+if(!file.exists(mainDir, subDir)) dir.create(file.path(mainDir, subDir), recursive = TRUE)
+if(length(list.files(recursive = TRUE, pattern = "All_genes_modules_Power", path = paste0(mainDir, subDir))) == 0) {
+  filenames <- list.files("outputs/WGCNA/ModuleDetection/", full.names = T)
+  SAVEPATH <- "outputs/WGCNA/MergeModules/"
+  for(file in filenames){
+    args <-  c(file, 5, 0.1, 0.15, 0.20, 0.25, 0.30)
+    Setting <- gsub(".*ModuleDetection|.RData", "", args[1])
+    print(Setting)
+    # loading Modules
+    load(args[1])
+    # Merging similar modules
+    args <- as.numeric(args[-1])
+    CutHeight <- args[2 :(args[1] + 1)]
+    for(i in 1: length(CutHeight)) { 
+      # Call an automatic merging function
+      merge <- WGCNA::mergeCloseModules(t(v_BatchMus$E), dynamicColors, cutHeight = CutHeight[i],
+                                           verbose = 3, corFnc = bicor) 
+      # The merged module colors
+      mergedColors <- merge$colors
+      # Eigengenes of the new merged modules:
+      mergedMEs <- merge$newMEs
+      write.csv(mergedMEs, paste0(SAVEPATH, "ModuleEigengenes_merged_", 
+                                    Setting, "CutHeight", CutHeight[i], ".csv"), row.names = FALSE)
+      # Summary output of network analysis results(after merging)
+      module_colors <- unique(mergedColors)
+      All_genes_modules <- as.data.frame(cbind(NAMES, mergedColors)) 
+      # colnames(All_genes_modules) <- NULL
+      write.csv(All_genes_modules, paste0(SAVEPATH, "All_genes_modules_", Setting,
+                                            "CutHeight", CutHeight[i], ".csv"), row.names = FALSE)
+      # names(colors) of the modules
+      nSamples <- nrow(t(v_BatchMus$E))
+      modNames <- substring(names(mergedMEs), 3)
+      geneModuleMembership <- as.data.frame(bicor(t(v_BatchMus$E), mergedMEs, maxPOutliers = 0.1)) 
+      MMPvalue <- as.data.frame(corPvalueStudent(as.matrix(geneModuleMembership), nSamples)) 
+      names(geneModuleMembership) <- gsub("ME", "MM", names(geneModuleMembership))
+      names(MMPvalue) <-  gsub("ME", "p.MM", names(MMPvalue))
+      write.csv(merge(geneModuleMembership, MMPvalue, by=0, all = TRUE, sort = FALSE),
+                 paste0(SAVEPATH, "GeneModule_Membership_MMPvalue_", Setting,
+                         "CutHeight", CutHeight[i], ".csv"), col.names = TRUE, row.names = FALSE)
+      phenWGCNA <- v_BatchMus$targets %>%
+        mutate(group = as.numeric(group)) %>%
+        mutate(individual = as.numeric(gsub("MD", "", individual))) %>%
+        select(-"sampleID") %>%
+        mutate(IsolationRNA = ifelse(IsolationRNA == "WithOutKit", 1, 0)) %>%
+        mutate(Hospital = ifelse(Hospital == "HMC", 1, 0)) %>%
+        mutate(lane = as.numeric(lane)) %>%
+        mutate(batch = as.numeric(batch))
+    
+    
+      # Module membership values and gene significance
+      for(j in 1 : length(phenWGCNA)[1]) 
+        {
+        # Define interested variable of datTrait
+        traitOfInterest <- as.data.frame(phenWGCNA [, j])
+        names(traitOfInterest) <-  colnames(phenWGCNA)[j]
+        ## Relating modules to external clinical traits and identifying important genes
+        nGenes <- ncol(t(v_BatchMus$E))
+        nSamples <- nrow(t(v_BatchMus$E))
+        moduleTraitCor <- matrix(nrow = dim(mergedMEs)[2], ncol = dim(phenWGCNA)[2]) 
+        colnames(moduleTraitCor) <- paste0("Cor_", colnames(phenWGCNA))
+        rownames(moduleTraitCor) <- colnames(mergedMEs) 
+        for(trait in colnames(phenWGCNA)) {
+          moduleTraitCor [, grep(trait, colnames(moduleTraitCor))] <-
+            cor(mergedMEs, phenWGCNA [, trait], use = "pairwise.complete.obs")
+        }
+        moduleTraitPvalue <- corPvalueStudent(moduleTraitCor, nSamples)
+        colnames(moduleTraitPvalue) <- paste0("Pvalue_", colnames(moduleTraitPvalue))
+    
+        # Writing the tables down with modules and correlation
+        write.csv(merge(moduleTraitCor, moduleTraitPvalue, by = 0, all = TRUE, sort = FALSE),
+                   paste0(SAVEPATH, "ModuleTrait_Cor_Pvalue_", Setting, "CutHeight",  CutHeight[i], ".csv"), 
+                   col.names = TRUE, row.names = FALSE) 
+    
+    
+        # correlation matrix of each gene and each traits
+        geneTraitSignificance <- as.data.frame(cor(t(v_BatchMus$E), traitOfInterest,
+                                                use = 'pairwise.complete.obs'))
+        GSPvalue <- as.data.frame(corPvalueStudent(as.matrix(geneTraitSignificance), nSamples)) 
+        names(geneTraitSignificance) <- paste0("GS.", names(traitOfInterest))
+        names(GSPvalue) <- paste0("p.GS.", names(traitOfInterest))
+        write.csv(merge(geneTraitSignificance,  GSPvalue, by=0, all = TRUE, sort = FALSE), 
+                   paste0(SAVEPATH, colnames(phenWGCNA)[ j],"_GeneTrait_Significance_GSPvalue_",
+                           Setting, "CutHeight",  CutHeight[i],
+                           ".csv"), col.names = TRUE, row.names = FALSE)
+      }
+    }
+  }
+}
+
+# 4. Coexpressed Pairs 
+mainDir = "outputs/WGCNA/"
+subDir = "CoexpressedPairs"
+if(!file.exists(mainDir, subDir)) dir.create(file.path(mainDir, subDir), recursive = TRUE)
+if(length(list.files(recursive = TRUE, pattern = "Power.*.RData", path = paste0(mainDir, subDir))) == 0) {
+  filenames <- list.files(recursive = TRUE, pattern = "All_genes_modules_Power", 
+                            path = "outputs/WGCNA/MergeModules/", full.names = TRUE)	
+  SAVEPATH <- "outputs/WGCNA/CoexpressedPairs/"
+  for(file in filenames){
+    args = file
+    Genes_Modules <- read.csv(args[1])
+    # remove genes which were not clustered(grey module)
+    Genes_Modules <- Genes_Modules[Genes_Modules$mergedColors != "grey",]
+    Modules <- unique(Genes_Modules$mergedColors)
+    All_pairs <- c()
+    for(module in 1 : length(Modules)) { 
+      subset <- Genes_Modules[Genes_Modules$mergedColors == Modules[module],]
+      # subset$NAMES <- gsub("\\..*", "", subset$NAMES)
+      Genes <- as.character(sort(subset$NAMES))
+      Pairs <- as.data.frame(t(combn(Genes, 2,)))
+      # Pairs$module <- Modules[module] 
+      All_pairs [[ module]] <- Pairs
+      }
+    All_pairs <- as.data.frame(do.call(rbind, All_pairs))
+    print(head(All_pairs))
+    print(dim(All_pairs))
+    # All_pairs$module <- NULL
+    save(All_pairs, file = paste0(SAVEPATH,
+                                    gsub(".*All_genes_modules_|.csv", "", args[1]), ".RData"))
+  }
+}
+
+# 5. Reactome knowledge pairs
+mainDir = "outputs/WGCNA/"
+subDir = "KnowledgeNetwork"
+if(!file.exists(mainDir, subDir)) dir.create(file.path(mainDir, subDir), recursive = TRUE)
+if(!file.exists(paste0(mainDir, subDir, "Reactome_KnowledgePairs.RData"))) {
+  Gene_list <- unique(rownames(v_BatchMus))
+
+  # Annotating gene ids using gProfileR
+  GenePathway_all <- c()
+  for(i in seq(0, length(Gene_list), 100)) {
+    print(i)
+    GS <- as.vector(na.omit(Gene_list [(i + 1) :(i + 100)]))
+    BG <- unique(as.vector(Gene_list))
+    print(length(GS))
+    GP <- gProfileR::gprofiler(as.vector(GS), organism = 'hsapiens', significant = F,
+                                domain_size = "known", custom_bg = BG, correction_method = "fdr", src_filter = "REAC")
+    if(dim(GP)[1] != 0) { GP$query.number <- i }
+    if(i == 0) GenePathway_all <- GP else GenePathway_all <- rbind(GenePathway_all, GP)
+  }
+  save(GenePathway_all, file = "outputs/WGCNA/KnowledgeNetwork/GenePathway.RData")
+
+  load("outputs/WGCNA/KnowledgeNetwork/GenePathway.RData")
+  GenePathway_all [, c(1 : 3, 5, 7, 8, 11, 13)] <- NULL
+
+  GenePathway_all <- aggregate(GenePathway_all[- c(1, 3, 4, 5)], by = list(GenePathway_all$term.size,
+                                                                                 GenePathway_all$term.id,
+                                                                                 GenePathway_all$ domain,
+                                                                                 GenePathway_all$term.name),
+                                c)
+  colnames(GenePathway_all)[1 : 4] <- c("term.size", "term.id", "domain", "term.name")
+  x <- GenePathway_all$overlap.size
+  y <- character(length(x))
+  for(i in 1 : length(x)) y[i] <- as.numeric(sum(x [[ i]]))
+  GenePathway_all$overlap.size <- as.numeric(y)
+  x <- GenePathway_all$intersection
+  y <- character(length(x)) 
+  for(i in 1 : length(x)) y[i] <- paste0(unique(x [[ i]]), collapse = ",")
+  GenePathway_all$intersection <- y
+
+  # Extracting the annotations from Reactome and HPO
+  GenePathway_REAC <- GenePathway_all[grep("REAC:", GenePathway_all$term.id),]
+  # Removing generic terms
+  GenePathway_REAC <- GenePathway_REAC[! GenePathway_REAC$term.name == "Reactome",]
+
+  rm(list = setdiff(ls(), c("GenePathway_REAC")))
+
+  # Knowledge pairs based on Reactome and HP
+  Pathways <- unique(GenePathway_REAC$term.id)
+  All_pairs <- c()
+  for(i in 1 : length(Pathways)) {
+    genes <- sort(unlist(strsplit(GenePathway_REAC[GenePathway_REAC$term.id == Pathways[i], "intersection"], split = ",")))
+    if(length(genes) != 1)
+      { Pairs <- as.data.frame(t(combn(sort(genes), 2)))
+      if(length(All_pairs) == 0) All_pairs <- Pairs else All_pairs <- rbind(All_pairs, Pairs)
+    }
+  }
+  All_Knowledge_pairs <- unique(All_pairs)
+  Annotated_genes <- unique(unlist(strsplit(GenePathway_REAC$intersection, split = ","))) 
+
+  save(All_Knowledge_pairs, Annotated_genes, GenePathway_REAC, file = "outputs/WGCNA/KnowledgeNetwork/Reactome_KnowledgePairs.RData")
+}
+
+# 6. Overlap
+mainDir = "outputs/WGCNA/"
+subDir = "OverlabCP_KP"
+if(!file.exists(mainDir, subDir)) dir.create(file.path(mainDir, subDir), recursive = TRUE)
+if(!file.exists(paste0(mainDir, subDir, "OverlapCP_KP.RData"))) {
+  rm(list = ls())
+  load("outputs/WGCNA/KnowledgeNetwork/Reactome_KnowledgePairs.RData")
+  All_Knowledge_pairs <- sapply(All_Knowledge_pairs, as.character)
+  filenames <- list.files(recursive = TRUE, path = "outputs/WGCNA/CoexpressedPairs", full.names = TRUE)	
+
+  # length(Annotated_genes) ## No. of genes with Reatome annotation in GSE36398 dataset
+  Overlap_all <- c()
+  for(file in filenames){
+    load(file)
+    Coexpressed_pairs <- sapply(All_pairs, as.character) ; rm(All_pairs)
+    Annotated_Coexpressed_pairs <- unique(Coexpressed_pairs[Coexpressed_pairs [,"V1"] %in% 
+                                                                 Annotated_genes &
+                                                                 Coexpressed_pairs [,"V2"] %in%
+                                                                 Annotated_genes,])
+    Annotated_Coexpressed_genes <- unique(c(Annotated_Coexpressed_pairs [,"V1"],
+                                              Annotated_Coexpressed_pairs [,"V2"]))
+    N <- length(Annotated_Coexpressed_genes) ## Co-expressed and annotated genes
+    All_possible_pairs <-(length(Annotated_genes) *(length(Annotated_genes) - 1)) / 2 
+
+    # Annotated_Coexpressed_pairs <- apply(Annotated_Coexpressed_pairs[, c("V1", "V2")], 1, FUN = function(x) paste(sort(x), collapse = "-"))
+    Pairs <- merge(Annotated_Coexpressed_pairs, All_Knowledge_pairs)
+    print(dim(Pairs))
+    Annotated_Coexpressed_pairs <- Annotated_Coexpressed_pairs [, c(2, 1)]
+    colnames(Annotated_Coexpressed_pairs) <- colnames(All_Knowledge_pairs)
+    Pairs1 <- merge(Annotated_Coexpressed_pairs, All_Knowledge_pairs)
+    print(dim(Pairs1))
+    Pairs <- unique(rbind(Pairs, Pairs1))
+    print(dim(Pairs))
+    SM_SP <- dim(Pairs)[1]
+    SM_nSP <- dim(Annotated_Coexpressed_pairs)[1] - SM_SP
+    nSM_SP <- dim(All_Knowledge_pairs)[1] - SM_SP
+    nSM_nSP <- All_possible_pairs -(SM_SP + SM_nSP + nSM_SP)
+    table2_2 <- rbind(c(SM_SP, nSM_SP), c(SM_nSP, nSM_nSP))
+    Ftest <- fisher.test(table2_2)
+    OutPut <- data.frame(setting = gsub(".*\\/|.RData", "", file),
+                          No_Annotated_Coexpressed_genes = length(Annotated_Coexpressed_genes),
+                          Ftest = Ftest$p.value, odds_ratio = Ftest$estimate,
+                          SM_SP = SM_SP, SM_nSP = SM_nSP, nSM_SP = nSM_SP, nSM_nSP = nSM_nSP)
+    rownames(OutPut) <- NULL
+    print(OutPut)
+    Overlap_all [[gsub(".*\\/|.RData", "", file)]] <- OutPut
+  }
+  Overlap_all <- data.table::rbindlist(Overlap_all)
+  save(Overlap_all, file = "outputs/WGCNA/OverlabCP_KP/OverlapCP_KP.RData")
+}
+
+# 7. Settings summary
+if(! file.exists("outputs/WGCNA/OverlabCP_KP/SettingsSummary.RData")) {
+  rm(list = ls())
+  load("outputs/WGCNA/OverlabCP_KP/OverlapCP_KP.RData")
+  # head(Overlap_all)
+  filenames <- list.files(recursive = TRUE, path = "outputs/WGCNA/MergeModules/", pattern = "All_genes_modules", full.names = TRUE)
+  SettingsSummary <- matrix(NA, nrow = length(filenames), ncol = 8)
+  rownames(SettingsSummary) <- gsub(".*All_genes_modules_|.csv", "", filenames)
+  for(file in filenames) {
+    x <- read.csv(file)
+    setting <- gsub(".*All_genes_modules_|.csv", "", file)
+    SettingsSummary[setting,] <- c(length(unique(x[x$mergedColors == "grey", 1])), 
+                                       length(table(x$mergedColors)) - 1,
+                                       summary(as.vector(table(x [x$mergedColors != "grey",]$mergedColors))))
+    }
+  colnames(SettingsSummary) <- c("GreyM.size", "NoModules", "MinM.Size", "1stQ", "MedianM.Size",
+                                   "MeanM.Size", "3stQ", "MaxM.Size")
+  # The final setting table
+  Setting <- merge(Overlap_all, as.data.frame(SettingsSummary) %>% 
+                      tibble::rownames_to_column(var = "setting"), by = "setting")
+  save(Setting, file = "outputs/WGCNA/OverlabCP_KP/SettingsSummary.RData") } else {
+    rm(list = prob::setdiff(ls(), c("v_BatchMus", "Data")))
+    load("outputs/WGCNA/OverlabCP_KP/SettingsSummary.RData")
+  }
+```
+
+### Selecting the best WGCNA setting
+```{r SelectingBestSetting, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE}
+Setting <- Setting %>% 
+  mutate(Power = as.numeric(gsub("Power|MinModuleSize.*", "", setting))) %>%
+  mutate(MinModuleSize =  gsub(".*MinModuleSize|deepSplit.*", "", setting)) %>%
+  mutate(deepSplit =  gsub(".*deepSplit|CutHeight.*", "", setting)) %>%
+  mutate(CutHeight =  gsub(".*CutHeight", "", setting)) %>%
+  arrange(Power)
+p1 <- ggplot(Setting) +
+  stat_summary(mapping = aes(x = reorder(Power, setting), y = odds_ratio),
+                geom = "point", fun = "median") +
+  labs(x = "Power", y = "Reactome's enrichment factor") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 10, colour = "black"),
+         axis.title = element_text(size= 10, face = "bold"), panel.grid = element_blank())
+
+p2 <- ggplot(Setting) +
+  stat_summary(mapping = aes(x = MinModuleSize, y = odds_ratio),
+                geom = "point", fun = "median") +
+  labs(x = "minClusterSize") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 10, colour = "black"),
+         axis.title = element_text(size= 10, face = "bold"), 
+         axis.title.y = element_blank(), panel.grid = element_blank())
+
+p3 <- ggplot(Setting) +
+  stat_summary(mapping = aes(x = deepSplit, y = odds_ratio),
+                geom = "point", fun = "median") +
+  labs(x = "deepSplit") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 10, colour = "black"),
+         axis.title = element_text(size= 10, face = "bold"), 
+         axis.title.y = element_blank(), panel.grid = element_blank())
+
+p4 <- ggplot(Setting) +
+  stat_summary(mapping = aes(x = CutHeight, y = odds_ratio),
+                geom = "point", fun = "median") +
+  labs(x = "cutHeight") +
+  theme_bw() +
+  theme(axis.text = element_text(size = 10, colour = "black"),
+         axis.title = element_text(size= 10, face = "bold"), 
+         axis.title.y = element_blank(), panel.grid = element_blank())
+
+grid.newpage()
+grid.draw(cbind(ggplotGrob(p1), ggplotGrob(p2), ggplotGrob(p3),  
+                    ggplotGrob(p4),                 
+                    size = "first")) 
+rm(list = paste0("p", 1:4))
+ggplot(Setting, aes(x = NoModules, y = odds_ratio)) +
+  geom_point(size = 2, alpha = 0.5) +
+  stat_smooth(method = "lm", col = "red") +
+  theme_bw() +
+  labs(x = "Number of modules", y = "Reactome's enrichment factor") +
+  theme(axis.text = element_text(size = 10, colour = "black"),
+          axis.title = element_text(size= 10, face = "bold"), 
+          title = element_text(size= 10, colour = "black"), panel.grid = element_blank())
+
+# Selecting the best setting considering the grey module size
+# < %30 in grey module
+print("< %30 in grey module")
+SettingSubset0.3 <- Setting[Setting$GreyM.size / nrow(v_BatchMus) < 0.3,]
+# Selected setting
+print(SettingSubset0.3[which.max(SettingSubset0.3$odds),])
+
+ggplot(SettingSubset0.3, aes(x = NoModules, y = odds_ratio)) +
+  geom_point(size = 2, alpha = 0.5) +
+  stat_smooth(method = "lm", col = "red") +
+  theme_bw() +
+  labs(x = "Number of modules", y = "Reactome's enrichment factor") +
+  theme(axis.text = element_text(size = 10, colour = "black"),
+          axis.title = element_text(size= 10, face = "bold"), 
+          title = element_text(size= 10, colour = "black"), panel.grid = element_blank())
+
+
+# < %50 in grey module
+print("< %50 in grey module")
+SettingSubset0.5 <- Setting[Setting$GreyM.size / nrow(v_BatchMus) < 0.5,]
+# Selected setting
+print(SettingSubset0.5[which.max(SettingSubset0.5$odds),])
+
+ggplot(SettingSubset0.5, aes(x = NoModules, y = odds_ratio)) +
+  geom_point(size = 2, alpha = 0.5) +
+  stat_smooth(method = "lm", col = "red") +
+  theme_bw() +
+  labs(x = "Number of modules", y = "Reactome's enrichment factor") +
+  theme(axis.text = element_text(size = 10, colour = "black"),
+          axis.title = element_text(size= 10, face = "bold"), 
+          title = element_text(size= 10, colour = "black"), panel.grid = element_blank())
+```
+
+The optimal set of parameters with the highest enrichment factor was: power: 8, MinModuleSize: 20, deepSplit: 0, Cut Height: 0.2.
+
+```{r}
+sessionInfo()
+```

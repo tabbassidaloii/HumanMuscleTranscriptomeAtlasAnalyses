@@ -1,11 +1,13 @@
 ---
 title: "DE analysis for genes"
+author:
+- tabbassidaloii
 output:
-  html_notebook: default
-  word_document: default
+ md_document:
+    variant: markdown_github
+always_allow_html: yes
 editor_options:
   chunk_output_type: console
-  always_allow_html: true
 ---
 
 'Note:' The muscle abbreviations were GRA(for Gracilis), SED(semitendinosus distal),  SEM(semitendinosus middle)), GAL(gastrocnemius lateralis), REF(rectus femoris), VAM(vastus medialis) and VAL(vastus lateralis) in all the analyses(scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots(shown in the publication).
@@ -21,6 +23,7 @@ if(!"dplyr" %in% installed.packages())install.packages("dplyr")
 if(!"tibble" %in% installed.packages())install.packages("tibble")
 if(!"knitr" %in% installed.packages())install.packages("knitr")
 if(!"ggplot2" %in% installed.packages())install.packages("ggplot2")
+if(!"reshape2" %in% installed.packages())install.packages("reshape2")
 
 suppressPackageStartupMessages({ 
   library(edgeR)

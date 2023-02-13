@@ -21,6 +21,7 @@ if(!"ggplot2" %in% installed.packages())install.packages("ggplot2")
 if(!"lsmeans" %in% installed.packages())install.packages("lsmeans")
 if(!"RColorBrewer" %in% installed.packages())install.packages("RColorBrewer")
 if(!"WGCNA" %in% installed.packages())install.packages("WGCNA")
+if(!"reshape2" %in% installed.packages())install.packages("reshape2")
 
 suppressPackageStartupMessages({ 
   library(dplyr)
