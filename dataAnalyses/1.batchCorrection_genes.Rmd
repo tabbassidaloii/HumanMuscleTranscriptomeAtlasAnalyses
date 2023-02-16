@@ -14,20 +14,20 @@ editor_options:
 
 ```{r setup, include = FALSE}
 rm(list = ls())
-if(!"dplyr" %in% installed.packages())install.packages("dplyr")
-if(!"tibble" %in% installed.packages())install.packages("tibble")
-if(!"ggplot2" %in% installed.packages())install.packages("ggplot2")
-if(!"scales" %in% installed.packages())install.packages("scales")
-if(!require("BiocManager", quietly = TRUE))install.packages("BiocManager")
-if(!"limma" %in% installed.packages())BiocManager::install("limma")
-if(!"edgeR" %in% installed.packages())BiocManager::install("edgeR")
-if(!"biomaRt" %in% installed.packages())BiocManager::install("biomaRt")
-if(!"knitr" %in% installed.packages())install.packages("knitr")
-if(!"factoextra" %in% installed.packages())install.packages("factoextra")
-if(!"gplots" %in% installed.packages())install.packages("gplots")
-if(!"RColorBrewer" %in% installed.packages())install.packages("RColorBrewer")
-if(!"ggpubr" %in% installed.packages())install.packages("ggpubr")
-if(!"reshape2" %in% installed.packages())install.packages("reshape2")
+if(!"dplyr" %in% installed.packages()) install.packages("dplyr")
+if(!"tibble" %in% installed.packages()) install.packages("tibble")
+if(!"ggplot2" %in% installed.packages()) install.packages("ggplot2")
+if(!"scales" %in% installed.packages()) install.packages("scales")
+if(!require("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+if(!"limma" %in% installed.packages()) BiocManager::install("limma")
+if(!"edgeR" %in% installed.packages()) BiocManager::install("edgeR")
+if(!"biomaRt" %in% installed.packages()) BiocManager::install("biomaRt")
+if(!"knitr" %in% installed.packages()) install.packages("knitr")
+if(!"factoextra" %in% installed.packages()) install.packages("factoextra")
+if(!"gplots" %in% installed.packages()) install.packages("gplots")
+if(!"RColorBrewer" %in% installed.packages()) install.packages("RColorBrewer")
+if(!"ggpubr" %in% installed.packages()) install.packages("ggpubr")
+if(!"reshape2" %in% installed.packages()) install.packages("reshape2")
 
 suppressPackageStartupMessages({ 
   library(dplyr)
@@ -615,7 +615,7 @@ for(file in c("Raw", "BatchMus")){
             Rowv = T, showRowDendro = F)
   
 }
-save(D_Raw, D_BatchMus, HTseqCount, countAdjBatchMus, file =  "outputs/correctedGeneDatasetToAnalysis.RData")
+save(D_Raw, D_BatchMus, HTseqCount, countAdjBatchMus, file =  "outputs/correctedGenesDatasetToAnalysis.RData")
 rm (list = setdiff(ls(), c("D_Raw", "D_BatchMus")))
 ```
 

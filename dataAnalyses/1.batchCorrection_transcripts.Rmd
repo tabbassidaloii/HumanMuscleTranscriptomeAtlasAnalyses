@@ -309,7 +309,7 @@ HosColPlot <- col.Hos[match(D_Raw$samples$Hospital[match(colnames(D_Raw),
 ```{r normalization, echo = FALSE, warning = FALSE, fig.height = 6, fig.width = 10}
 #Keeping transcripts originating from genes in filtered gene count table
 geneData <- new.env()
-load("outputs/correctedGeneDatasetToAnalysis.RData", envir = geneData)
+load("outputs/correctedGenesDatasetToAnalysis.RData", envir = geneData)
 
 overlapping_transcripts <- D_BatchMus$genes$ensembl_transcript_id[D_BatchMus$genes$ensembl_gene_id %in% geneData$D_BatchMus$genes$ensembl_gene_id]
 D_BatchMus <- D_BatchMus[rownames(D_BatchMus) %in% overlapping_transcripts,]

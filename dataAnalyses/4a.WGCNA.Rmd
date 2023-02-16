@@ -33,7 +33,7 @@ BiocStyle::markdown()
 options(scipen = 999)
 
 # Loading the data
-Data <- new.env(); load("outputs/correctedGeneDatasetToAnalysis.RData", envir = Data)
+Data <- new.env(); load("outputs/correctedGenesDatasetToAnalysis.RData", envir = Data)
 D_BatchMus <- Data$D_BatchMus
 # Creating a design matrix
 design <- model.matrix(~ group + individual, data = D_BatchMus$samples)

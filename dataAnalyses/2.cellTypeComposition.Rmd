@@ -40,7 +40,7 @@ col.muscle <- c("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999",
                 "VAM" = "#FF3333")
 
 setwd(dirname(rstudioapi::getSourceEditorContext()$path))
-Data <- new.env(); load("outputs/correctedGeneDatasetToAnalysis.RData", envir = Data)
+Data <- new.env(); load("outputs/correctedGenesDatasetToAnalysis.RData", envir = Data)
 D_BatchMus <- Data$D_BatchMus
 ```
 

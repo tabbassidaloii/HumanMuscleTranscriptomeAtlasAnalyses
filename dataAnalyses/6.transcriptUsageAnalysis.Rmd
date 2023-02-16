@@ -1,0 +1,231 @@
+---
+title: "Transcript Usage Analysis"
+author:
+- tabbassidaloii
+output:
+ md_document:
+    variant: markdown_github
+always_allow_html: yes
+editor_options:
+  chunk_output_type: console
+---
+
+'Note:' The muscle abbreviations were GRA (for Gracilis), SED (semitendinosus distal),  SEM (semitendinosus middle)), GAL (gastrocnemius lateralis), REF (rectus femoris), VAM (vastus medialis) and VAL (vastus lateralis) in all the analyses (scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots (shown in the publication).
+
+```{r setup, include = FALSE}
+rm(list = ls())
+if(!require("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+if(!"IsoformSwitchAnalyzeR" %in% installed.packages()) BiocManager::install("IsoformSwitchAnalyzeR")
+if(!"BSgenome.Hsapiens.UCSC.hg38" %in% installed.packages()) BiocManager::install("BSgenome.Hsapiens.UCSC.hg38")
+if(!"biomaRt" %in% installed.packages())BiocManager::install("biomaRt")
+if(!"dplyr" %in% installed.packages()) install.packages("dplyr")
+if(!"ggplot2" %in% installed.packages())install.packages("ggplot2")
+
+suppressPackageStartupMessages({
+  library(IsoformSwitchAnalyzeR)
+  library(biomaRt)
+  library(dplyr)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  library(ggplot2)
+})
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+```
+
+### transcript usage differences 
+```{r transcriptUsageAnalysis, echo = FALSE, warning = FALSE, message = FALSE}
+Quant <- importIsoformExpression( #providing a directory with Stringtie ctab files
+  parentDir = "input/Stringtie/",
+  addIsofomIdAsColumn = TRUE,
+  readLength = 150
+)
+
+### Organising gene/transcripts annotations
+ensembl <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl", host = "http://sep2019.archive.ensembl.org/")
+transcriptIDs <- getBM(attributes = c('ensembl_gene_id', 'ensembl_transcript_id', 'transcript_length', 'chromosome_name', 'gene_biotype'), mart = ensembl) %>%  # nolint
+  filter(ensembl_transcript_id %in% Quant$counts$isoform_id) %>%
+  arrange(ensembl_transcript_id) 
+
+if(all(Quant$counts$isoform_id == transcriptIDs$ensembl_transcript_id))
+  tpm <- cbind(transcriptIDs, tpm[-1])
+
+### Transcript IDs of genes that were present in the filtered gene dataset
+geneData <- new.env()
+load("outputs/correctedTranscriptsDatasetToAnalysis.RData", envir = geneData)
+transcriptIDsFilt <- transcriptIDs %>% filter(ensembl_gene_id %in% geneData$D_BatchMus$genes$ensembl_gene_id)
+
+myDesign <- data.frame(
+  sampleID = colnames(Quant$abundance)[-1],
+  condition = gsub('.*_', '', gsub('_Sam.*', '', colnames(Quant$abundance)[-1])),
+  batch = as.factor (
+    ifelse (gsub (".*_", "", colnames (Quant$abundance)[-1]) %in% 
+              paste0 ("Sam", 1:39), "1",
+            ifelse (gsub (".*_", "", colnames (Quant$abundance)[-1]) %in% 
+                      paste0 ("Sam", 40:78), "2", 
+                    ifelse (gsub (".*_", "", colnames (Quant$abundance)[-1]) %in% 
+                              paste0 ("Sam", 79:117), "3",
+                            ifelse (gsub (".*_", "", colnames (Quant$abundance)[-1]) %in% 
+                                      paste0 ("Sam", 118:156), 
+                                    "4", "5"))))))
+
+### Create switchAnalyzeRlist
+aSwitchList <- importRdata(
+  isoformCountMatrix   = Quant$counts,
+  isoformRepExpression = Quant$abundance,
+  designMatrix         = myDesign,
+  isoformExonAnnoation = "Homo_sapiens.GRCh38.98.gtf",
+  isoformNtFasta = "gencode.v32.transcriptsNoVersion.fa",
+  # fixStringTieAnnotationProblem = TRUE,
+  ignoreAfterPeriod = T, 
+  removeNonConvensionalChr = T,
+  showProgress = FALSE
+)
+
+### Subset transcripts of genes that were present in the filtered gene dataset
+aSwitchList <- subsetSwitchAnalyzeRlist(
+  switchAnalyzeRlist = aSwitchList,
+  subset = aSwitchList$isoformFeatures$isoform_id %in% transcriptIDsFilt$ensembl_transcript_id
+)
+
+combined <- isoformSwitchAnalysisCombined(
+  aSwitchList,
+  alpha = 0.05,
+  dIFcutoff = 0.1,
+  switchTestMethod='DEXSeq',
+  n = NA,
+  pathToOutput = "outputs/transcriptUsageAnalysis/figures",
+  overwriteORF = FALSE,
+  outputSequences = FALSE,
+  genomeObject = Hsapiens,
+  orfMethod = 'longest',
+  cds = NULL,
+  consequencesToAnalyze = c('intron_retention','ORF_seq_similarity','NMD_status'),
+  fileType='pdf',
+  asFractionTotal = FALSE,
+  outputPlots = TRUE,
+  quiet = FALSE
+)
+save(combined, file = "outputs/transcriptUsageAnalysis/combined.RData")
+
+rm(list = ls())
+load("outputs/transcriptUsageAnalysis/combined.RData")
+
+exampleSwitchListAnalyzed <- analyzeAlternativeSplicing(
+  switchAnalyzeRlist = combined,
+  quiet=TRUE
+)
+table( exampleSwitchListAnalyzed$AlternativeSplicingAnalysis$IR )
+#Meaning 84 isoforms contain a single intron retention (IR) and 23 isoforms each contain two or more intron retentions.
+
+extractSplicingSummary(
+  exampleSwitchListAnalyzed,
+  asFractionTotal = FALSE,
+  plotGenes=FALSE
+)
+
+#The alternative splicing (AS)
+#alternative 3′ acceptor sites (A3), alternative 5′ donor sites (A5), exon skipping (ES),
+#mutually exclusive exons (MEE), AS at TF start sites (ATSS), AS at termination site (ATTS), and intron retention (IR).
+
+sigIsoforms <- combined$isoformSwitchAnalysis %>% 
+  filter (padj < 0.05) %>% 
+  .$isoform_id 
+#IF (isoform fraction) quantifies the fraction of the parent gene expression originating from a specific isoform (calculated as isoform_exp / gene_exp)
+#dIF (difference in isoform fraction), the difference in isoform usage, is quantified as the calculated as IF2 - IF1
+#and these dIF are used to measure the effect size (like fold changes are in gene/isoform expression analysis)
+
+sigGenes <- unique(combined$isoformFeatures$gene_id[match(sigIsoforms, combined$isoformFeatures$isoform_id)])
+sigGenes <- combined$isoformSwitchAnalysis %>%
+  mutate(gene_id = combined$isoformFeatures$gene_id[match(gene_ref, combined$isoformFeatures$gene_ref)]) %>%
+  filter(gene_id %in% sigGenes)
+
+# for the paper
+muscleAbbreviation <- c("GAL" = "GL", "GRA" = "GR", "VAL" = "VL", "VAM" = "VM", "SED" = "STD", "SEM" = "STM", "REF" = "RF")
+allGenes <- combined$isoformSwitchAnalysis %>%
+  mutate(gene_id = combined$isoformFeatures$gene_id[match(gene_ref, combined$isoformFeatures$gene_ref)])
+
+allGenes <- allGenes %>%
+  rename(`ensembl transcript id` = isoform_id,  `hgnc symbol` = gene_id,
+          M1 = condition_1,  M2 = condition_2, `p-value` = pvalue, FDR = padj) %>%
+  select(`ensembl transcript id`, `hgnc symbol`, M1, M2, dIF, `p-value`, FDR, IF1, IF2) %>%
+  mutate(M1 = muscleAbbreviation [match(M1, names(muscleAbbreviation))],
+         M2 = muscleAbbreviation [match(M2, names(muscleAbbreviation))]) %>% arrange(`hgnc symbol`, FDR)
+allGenes[ , -c(1:4)] <- apply(allGenes[ , -c(1:4)], 2, function (x) round(x, digits = 5)) 
+
+muscleAbbreviation <- c("GAL" = "GL", "GRA" = "GR", "VAL" = "VL", "VAM" = "VM", "SED" = "STD", "SEM" = "STM", "REF" = "RF")
+toPlot <- sigGenes %>% 
+  mutate(condition_1 = muscleAbbreviation [match(condition_1, names(muscleAbbreviation))],
+         condition_2 = muscleAbbreviation [match(condition_2, names(muscleAbbreviation))],
+         comparison = paste0 (condition_1, " vs ", condition_2),
+         comparison = ifelse (comparison == "GR vs RF", "RF vs GR", comparison),
+         comparison = ifelse (comparison == "GR vs VL", "VL vs GR", comparison),
+         comparison = ifelse (comparison == "GR vs VM", "VM vs GR", comparison),
+         comparison = ifelse (comparison == "STD vs VL", "VL vs STD", comparison),
+         comparison = ifelse (comparison == "STD vs VM", "VM vs STD", comparison),
+         comparison = ifelse (comparison == "STM vs VL", "VL vs STM", comparison),
+         comparison = ifelse (comparison == "STM vs VM", "VM vs STM", comparison)) %>%
+  filter(padj < 0.05) %>%
+  group_by(gene_id, comparison) %>%
+  summarise(n = n())
+
+(toSave <- ggplot(toPlot, aes(x = comparison, y = gene_id, fill = n)) +
+  geom_tile(color = "white") +
+  theme_bw() +
+  scale_fill_gradient(low = "#FFFFCC", high = "red") +
+  geom_text(aes(label = n), color = "black", size = 3) +
+  labs(y =  element_blank(), x = element_blank(), fill = "#Transcripts") +
+  theme(axis.text.x = element_text(angle = 270, size = 9, vjust = 0.5, hjust = 0, colour = "black"),
+        axis.text.y = element_text(size = 8, colour = "black"), axis.ticks.x = element_blank(), legend.position = "none"))
+
+ggsave(toSave, device = "tiff", units = "cm", width = 15, height = 22,
+       filename = "figures/isoformSwitches.tif")
+
+## removing transcripts originated from cell type related genes 
+geneData <- new.env()
+load("outputs/cellTypeComposition/geneCellTypesEigengeneCor.RData", envir = geneData)
+load("outputs/correctedGenesDatasetToAnalysis.RData", envir = geneData)
+
+
+geneCellTypeRelated <- geneData$D_BatchMus$genes$hgnc_symbol[geneData$D_BatchMus$genes$ensembl_gene_id %in% unique(unlist(geneData$SigGenesCellTypes, use.names = F))]
+geneCellTypeRelated <- unique(toPlot$gene_id) [unique(toPlot$gene_id) %in% geneCellTypeRelated]
+
+col.muscle <- c("GL" = "#999999", "GR" = "#0099FF", "RF" = "#FF9999", 
+                "STD" = "#0033FF", "STM" = "#0066FF", "VL" = "#FF6666", 
+                "VM" = "#FF3333")
+MusDissSim_BatchMus <- matrix(0, nrow = 7, ncol = 7) 
+colnames(MusDissSim_BatchMus) <- rownames(MusDissSim_BatchMus) <- names(col.muscle) 
+for(c in unique(toPlot$comparison)){
+  MusDissSim_BatchMus [gsub(".* vs ", "", c), gsub(" vs .*", "", c)] <- 
+    MusDissSim_BatchMus [gsub(" vs .*", "", c), gsub(".* vs ", "", c)] <- 
+    length(toPlot %>% filter(comparison == c) %>% .$gene_id %>% unique())
+}
+
+(Tosave <- pheatmap::pheatmap(MusDissSim_BatchMus, 
+                              color = colorRampPalette(c("white", "gray"))(10),
+                              scale = "none", number_format = "%.0f", 
+                              cluster_cols = T, cluster_rows = T, 
+                              fontsize = 12, key =F, angle_col = 90, 
+                              legend_breaks = c(0, 5, 10, 15, 20, 25),
+                              display_numbers = T, na_col = "white", ))
+ggsave(Tosave, device = "tiff", units = "cm", width = 8, height = 7, 
+       filename = "figures/Transcript_isoformSwitches_all_muscles.tif")
+
+MusDissSim_BatchMus <- matrix(0, nrow = 7, ncol = 7) 
+colnames(MusDissSim_BatchMus) <- rownames(MusDissSim_BatchMus) <- names(col.muscle) 
+for(c in unique(toPlot$comparison)){
+  MusDissSim_BatchMus [gsub(".* vs ", "", c), gsub(" vs .*", "", c)] <- 
+    MusDissSim_BatchMus [gsub(" vs .*", "", c), gsub(".* vs ", "", c)] <- 
+    length(toPlot %>% filter (!gene_id %in% geneCellTypeRelated, comparison == c) 
+          %>% .$gene_id %>% unique())
+}
+
+(Tosave <- pheatmap::pheatmap(MusDissSim_BatchMus, 
+                              color = colorRampPalette(c("white", "gray"))(10),
+                              scale = "none", number_format = "%.0f", 
+                              cluster_cols = T, cluster_rows = T, 
+                              fontsize = 12, key =F, angle_col = 90, 
+                              legend_breaks = c(0, 5, 10, 15, 20, 25),
+                              display_numbers = T, na_col = "white", ))
+ggsave(Tosave, device = "tiff", units = "cm", width = 8, height = 7, 
+       filename = "figures/Transcript_isoformSwitches_muscles.tif")
+```
+

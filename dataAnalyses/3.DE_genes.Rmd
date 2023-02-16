@@ -46,7 +46,7 @@ col.muscle <- c("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999",
 
 setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 # loading data
-load("outputs/correctedGeneDatasetToAnalysis.RData")
+load("outputs/correctedGenesDatasetToAnalysis.RData")
 ```
 
 ## Differential expression analysis

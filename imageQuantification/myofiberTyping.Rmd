@@ -1013,7 +1013,7 @@ names (col.muscle) <- muscleAbbreviation [match (names (col.muscle), names (musc
          axis.ticks = element_blank (), legend.text = element_text (size = 12, vjust = 0.5), axis.title.y = element_text (size = 12), axis.title.x = element_blank()))
 
 
-ggsave(Tosave, device = "tiff", units = "cm", width = 12, height = 10, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Per_MyofiberInClusters.tif")
+ggsave(Tosave, device = "tiff", units = "cm", width = 12, height = 10, filename = "figures/Per_MyofiberInClusters.tif")
 
 
 # FiltClust_To_DataTable %>% count (Individual, Muscle) %>% pivot_wider (names_from = Individual, values_from = n) 
@@ -1177,7 +1177,7 @@ rownames (ClusterPlot)[rownames (ClusterPlot) == "MyHC2X"] = "Cluster 3"
 
 Tosave <- pheatmap::pheatmap (t (AnovaTest [, grep ("t.ratio:", colnames (AnovaTest))]), color = rampCols, scale = "none", legend_labels = "t.ratio", cluster_cols = T, cluster_rows = T, labels_row = gsub ("-", "vs  ", gsub (".*:", "", grep ("t.ratio: ", colnames (AnovaTest), value = T) )), fontsize = 12, angle_col = 90) 
 
-ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 8, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Myofiber_t.ratio2.tif")
+ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 8, filename = "figures/Myofiber_t.ratio2.tif")
 
 
 FiberClusterToPlot <- FiberClusterTable %>% filter (variable == "Filt1_3H02") %>% 
@@ -1200,7 +1200,7 @@ Tosave <- pheatmap::pheatmap (as.matrix (FiberClusterToPlot) *100,
                               breaks = seq (0, 50, 2),
                               labels_col = c ("Cluster 2", "Cluster 1", "Cluster 3"),
                               angle_col = 90)
-ggsave(Tosave, device = "tiff", units = "cm", width = 8, height = 10, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Per_MyofiberInClusters-heatmap.tif")
+ggsave(Tosave, device = "tiff", units = "cm", width = 8, height = 10, filename = "figures/Per_MyofiberInClusters-heatmap.tif")
 ```
 
 ```{r, include = F}
@@ -1293,7 +1293,7 @@ tail (sort(To3Dplot$MyHC1_Filt1_3),30)
 tail (sort(To3Dplot$MyHC2A_Filt1_3),30)
 tail (sort(To3Dplot$MyHC2X_Filt1_3),30)
 
-tiff (filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Plot3D.tif", width = 8, height = 8, units = "cm", res = 650)
+tiff (filename = "figures/Plot3D.tif", width = 8, height = 8, units = "cm", res = 650)
 par(mai = c(0.5, 0.5, 0.5, 0.5))
 (Tosave = scatter3D (y = To3Dplot$MyHC1_Filt1_3, z = To3Dplot$MyHC2A_Filt1_3,
            x = To3Dplot$MyHC2X_Filt1_3,
@@ -1305,7 +1305,7 @@ To3Dplot <- To3Dplot[To3Dplot$MyHC1_Filt1_3 < 2,]
 To3Dplot <- To3Dplot[To3Dplot$MyHC2A_Filt1_3 < 1.5,]
 To3Dplot <- To3Dplot[To3Dplot$MyHC2X_Filt1_3 < 1.3,]
 
-tiff (filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Plot3D_3.tif", width = 8, height = 8, units = "cm", res = 650)
+tiff (filename = "figures/Plot3D_3.tif", width = 8, height = 8, units = "cm", res = 650)
 par(mai = c(0.5, 0.5, 0.5, 0.5))
 scatter3D (y = To3Dplot$MyHC1_Filt1_3, z = To3Dplot$MyHC2A_Filt1_3,
            x = To3Dplot$MyHC2X_Filt1_3,
@@ -1575,10 +1575,10 @@ P3 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2X"), aes(x = MYH1, y = per.n_
          axis.ticks = element_blank (), legend.text = element_text ( size = 12, vjust = 0.5),
          strip.text = element_text (size = 12, face = "bold"), legend.position = "none")
 (Tosave <- plot_grid (P1, P2, P3, hjust = 0, vjust = 1, ncol = 3))
-ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 6, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Myofibertype_gene.tif")
+ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 6, filename = "figures/Myofibertype_gene.tif")
 
 Consensus <- "Consensus0.4"
-filenames <- list.files (recursive = TRUE, path = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/MuscleDataset/Outputs/ConsensusWGCNA", pattern = paste0 (Consensus, ".csv"), full.names = TRUE)
+filenames <- list.files (recursive = TRUE, path = "outputs/ConsensusWGCNA", pattern = paste0 (Consensus, ".csv"), full.names = TRUE)
 
 mergedMEs <- read.csv (filenames [grepl ("ModuleEigengenes", filenames)]) 
 rownames (mergedMEs) <- colnames (v_BatchMus)
@@ -1656,7 +1656,7 @@ P3 <- ggplot (ToPlot %>% filter (Clusters == "MyHC2X"), aes(x = M.7, y = per.n_F
          axis.ticks = element_blank (), legend.text = element_text ( size = 12, vjust = 0.5),
          strip.text = element_text (size = 12, face = "bold"), legend.position = "none")
 (Tosave <- plot_grid (P1, P2, P3, hjust = 0, vjust = 1, ncol = 3))
-ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 6, filename = "F:/Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/PaperFigures/Myofibertype_M.7.tif")
+ggsave(Tosave, device = "tiff", units = "cm", width = 18, height = 6, filename = "figures/Myofibertype_M.7.tif")
 ```
 
 ```{r}
