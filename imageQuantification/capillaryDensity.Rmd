@@ -1,251 +1,257 @@
 ---
-  title: "Capillary density analysis in R"
-output: html_notebook
-editor_options: 
+title: "Capillary density analysis in R"
+author:
+- tabbassidaloii
+output:
+ md_document:
+    variant: markdown_github
+always_allow_html: yes
+editor_options:
   chunk_output_type: console
 ---
 
-'Note:' The muscle abbreviations were GRA (for Gracilis), SED (semitendinosus distal),  SEM (semitendinosus middle)), GAL (gastrocnemius lateralis), REF (rectus femoris), VAM (vastus medialis) and VAL (vastus lateralis\) in all the analyses (scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots.
+'Note:' The muscle abbreviations were GRA(for Gracilis), SED(semitendinosus distal),  SEM(semitendinosus middle)), GAL(gastrocnemius lateralis), REF(rectus femoris), VAM(vastus medialis) and VAL(vastus lateralis) in all the analyses(scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots(shown in the publication).
 
 ```{r setup, include = FALSE}
-rm (list = ls ())
-suppressPackageStartupMessages ({ 
-  library (data.table)
-  library (dplyr)
-  library (ggplot2)
-  library (scales) 
-  library (dplyr)
-  library (plotly)
-  library (knitr)
-  library (cowplot)
-  library (tidyr)
-  library (grid)
-  library (ggpubr)
-  library (rgl)
+rm(list = ls())
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+if(!"dplyr" %in% installed.packages()) install.packages("dplyr")
+if(!"data.table" %in% installed.packages()) install.packages("data.table")
+if(!"tidyr" %in% installed.packages()) install.packages("tidyr")
+if(!"ggplot2" %in% installed.packages()) install.packages("ggplot2")
+if(!"lmerTest" %in% installed.packages())install.packages("lmerTest")
+if(!"knitr" %in% installed.packages()) install.packages("knitr")
+if(!"reshape2" %in% installed.packages()) install.packages("reshape2")
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(data.table)
+  library(tidyr)
+  library(ggplot2)
   library(lmerTest)
+  library(knitr)
 })
 
 knit_hooks$set(webgl = hook_webgl)
-set.seed (1)
+set.seed(1)
 
-setwd("F://Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/MuscleDAtaset/HumanMuscleTranscriptomeAtlasAnalyses/")
 # Read all the txt files:
-InputPath = "imageQuantification/input/capillaryDensity/myofibers/"
-Files <- list.files (path = InputPath, pattern = ".txt", full.names = T)
-DataTable <- lapply (Files, read.table)
-# Fixing a typo in image name file:
-names (DataTable) <- gsub (":.*", "", sapply (DataTable, function (x) x[1, 1]))
-DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s0`$Label <- gsub ("SED", "SEM", DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s0`$Label)
-DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s1`$Label <- gsub ("SED", "SEM", DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s1`$Label)
-DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s2`$Label <- gsub ("SED", "SEM", DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s2`$Label)
-names (DataTable)  <- gsub ("SED", "SEM", names (DataTable))
+InputPath = "input/capillaryDensity/myofibers/"
+Files <- list.files(path = InputPath, pattern = ".txt", full.names = T)
+DataTable <- lapply(Files, read.table)
+# Fixing a typo in image file name:
+names(DataTable) <- gsub(":.*", "", sapply(DataTable, function(x) x[1, 1]))
+DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s0`$Label <- gsub("SED", "SEM", DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s0`$Label)
+DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s1`$Label <- gsub("SED", "SEM", DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s1`$Label)
+DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s2`$Label <- gsub("SED", "SEM", DataTable$`MD22_SED_Sam92-ECS_2021.03.24_s2`$Label)
+names(DataTable)  <- gsub("SED", "SEM", names(DataTable))
 ```
 
 STM and GL sections of 20 individuals were stained with CD31 and ENG.
-All the steps including segmentation were done automatically, but we do not need to do any filtration as we will consider the total area.
+Though all the steps including segmentation were done automatically, we do not need to do any filtration as we will consider the total area.
 
 # Calculating the area
 ```{r area, echo = FALSE, message = FALSE, warning = FALSE, fig.show = FALSE, fig.height = 12, fig.width = 14}
-FiberData <- rbindlist (DataTable, idcol = TRUE) %>% 
-  select (.id, Label, Mean, Ch, Area) %>%
-  unique () %>%
-  mutate (Sample = gsub ("-.*", "", .id)) %>%
-  mutate (Replicate = gsub (".*_", "", .id)) %>%
-  mutate (Individual = gsub ("_.*", "", .id)) %>%
-  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
-  mutate (fiber = gsub (":.$", "", Label))
+FiberData <- rbindlist(DataTable, idcol = TRUE) %>%
+  select(.id, Label, Mean, Ch, Area) %>%
+  unique() %>%
+  mutate(Sample = gsub("-.*", "", .id)) %>%
+  mutate(Replicate = gsub(".*_", "", .id)) %>%
+  mutate(Individual = gsub("_.*", "", .id)) %>%
+  mutate(Muscle = gsub("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
+  mutate(fiber = gsub(":.$", "", Label))
 
-FiberData <- tidyr::pivot_wider (FiberData [,c ("fiber", "Individual", "Muscle", "Replicate", "Ch", "Mean", "Area")], names_from = Ch, values_from = Mean) 
+FiberData <- tidyr::pivot_wider(FiberData[,c("fiber", "Individual", "Muscle", "Replicate", "Ch", "Mean", "Area")], 
+                                names_from = Ch, values_from = Mean)
 
-No_Area_Fibers <- merge (FiberData %>%
-  count (Muscle, Individual, Replicate) %>%
-  rename (NoFiber = n), FiberData %>%
-    group_by (Muscle, Individual, Replicate) %>%
-    summarise (AreaFiber = sum (Area)))
+No_Area_Fibers <- merge(FiberData %>%
+  count(Muscle, Individual, Replicate) %>%
+  rename(NoFiber = n), FiberData %>%
+    group_by(Muscle, Individual, Replicate) %>%
+    summarise(AreaFiber = sum(Area)))
 
 FinalSamples <- No_Area_Fibers %>% 
-  group_by (Muscle, Individual) %>%
-  top_n (1, NoFiber) %>% # Selecting the replicate with the highest number of myofibers
-  filter (Individual != "MD19") %>% # The GL sample had a few number of myofibers so MD19 is excluded. 
-  select (Muscle, Individual, Replicate)
+  group_by(Muscle, Individual) %>%
+  top_n(1, NoFiber) %>% # Selecting the replicate with the highest number of myofibers
+  filter(Individual != "MD19") %>% # The GL sample had a few number of myofibers so samples from MD19 is excluded. 
+  select(Muscle, Individual, Replicate)
+
+rm(list = setdiff(ls(), c("DataTable", "col.muscle", "FiberData", "NoFibers", "No_Area_Fibers", "FinalSamples")))
 ```
 
 # Improting quantification for capillaries
 ```{r CDD31ENG, include = FALSE}
-rm (list = setdiff (ls (), c ("DataTable", "col.muscle", "FiberData", "NoFibers", "No_Area_Fibers", "FinalSamples")))
-
 # Read all the txt files:
-InputPath = "imageQuantification/input/capillaryDensity/ENG_CD31/"
-Files <- list.files (path = InputPath, pattern = "ENG", full.names = T)
+InputPath = "input/capillaryDensity/ENG_CD31/"
+Files <- list.files(path = InputPath, pattern = "ENG", full.names = T)
 
-DataTable_ENG <- lapply (Files, read.table)
-names (DataTable_ENG) <- gsub (".*/|_AnalyzeParticles.txt", "", Files)
-names (DataTable_ENG)  <- gsub ("SED", "SEM", names (DataTable_ENG))
+DataTable_ENG <- lapply(Files, read.table)
+names(DataTable_ENG) <- gsub(".*/|_AnalyzeParticles.txt", "", Files)
+# Fixing a typo in image file name:
+names(DataTable_ENG)  <- gsub("SED", "SEM", names(DataTable_ENG))
 
-Files <- list.files (path = InputPath, pattern = "CD31", full.names = T)
+Files <- list.files(path = InputPath, pattern = "CD31", full.names = T)
 
-DataTable_CD31 <- lapply (Files, read.table)
-names (DataTable_CD31) <- gsub (".*/|_AnalyzeParticles.txt", "", Files)
-names (DataTable_CD31)  <- gsub ("SED", "SEM", names (DataTable_CD31))
+DataTable_CD31 <- lapply(Files, read.table)
+names(DataTable_CD31) <- gsub(".*/|_AnalyzeParticles.txt", "", Files)
+# Fixing a typo in image file name:
+names(DataTable_CD31)  <- gsub("SED", "SEM", names(DataTable_CD31))
 
-rm (list = setdiff (ls (), c ("DataTable", "col.muscle", "FiberData", "NoFibers", "No_Area_Fibers", "FinalSamples", "DataTable_CD31", "DataTable_ENG")))
+rm(list = setdiff(ls(), c("DataTable", "col.muscle", "FiberData", "NoFibers", "No_Area_Fibers", "FinalSamples", "DataTable_CD31", "DataTable_ENG")))
 ```
 
 # Filtering the capillaries and drawing the plots
 ```{r CD31ENG_Filtering, units = "cm", fig.width = 8, fig.height = 10}
-DataToFilt_CD31 <- rbindlist (DataTable_CD31, idcol = TRUE) %>% 
-  select (- Label) %>%
-  unique () %>%
-  mutate (Sample = gsub ("-.*", "", .id)) %>%
-  mutate (Replicate = gsub ("_.*", "", gsub (".*_s", "s", .id))) %>%
-  mutate (Individual = gsub ("_.*", "", .id)) %>%
-  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
-  rename (id_CD31 = .id, Mean_CD31 = Mean, StdDev_CD31 = StdDev, Mode_CD31 = Mode,
+DataToFilt_CD31 <- rbindlist(DataTable_CD31, idcol = TRUE) %>% 
+  select(- Label) %>%
+  unique() %>%
+  mutate(Sample = gsub("-.*", "", .id)) %>%
+  mutate(Replicate = gsub("_.*", "", gsub(".*_s", "s", .id))) %>%
+  mutate(Individual = gsub("_.*", "", .id)) %>%
+  mutate(Muscle = gsub("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
+  rename(id_CD31 = .id, Mean_CD31 = Mean, StdDev_CD31 = StdDev, Mode_CD31 = Mode,
           Min_CD31 = Min, Max_CD31 = Max, Median_CD31 = Median,
           XM_CD31 = XM, YM_CD31 = YM)
 
-DataToFilt_ENG <- rbindlist (DataTable_ENG, idcol = TRUE) %>% 
-  select (- Label) %>%
-  unique () %>%
-  mutate (Sample = gsub ("-.*", "", .id)) %>%
-  mutate (Replicate = gsub ("_.*", "", gsub (".*_s", "s", .id))) %>%
-  mutate (Individual = gsub ("_.*", "", .id)) %>%
-  mutate (Muscle = gsub ("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
-  rename (id_ENG = .id, Mean_ENG = Mean, StdDev_ENG = StdDev, Mode_ENG = Mode,
+DataToFilt_ENG <- rbindlist(DataTable_ENG, idcol = TRUE) %>% 
+  select(- Label) %>%
+  unique() %>%
+  mutate(Sample = gsub("-.*", "", .id)) %>%
+  mutate(Replicate = gsub("_.*", "", gsub(".*_s", "s", .id))) %>%
+  mutate(Individual = gsub("_.*", "", .id)) %>%
+  mutate(Muscle = gsub("_.*", "", gsub("^[^_]*_", "", Sample))) %>%
+  rename(id_ENG = .id, Mean_ENG = Mean, StdDev_ENG = StdDev, Mode_ENG = Mode,
           Min_ENG = Min, Max_ENG = Max, Median_ENG = Median,
           XM_ENG = XM, YM_ENG = YM)
 
 # Organizing the tables
-if (all (DataToFilt_ENG [ , c ("Area", "Circ.", "AR", "Round", "Solidity", "Sample", "Replicate", "Individual", "Muscle")] == DataToFilt_CD31 [, c ("Area", "Circ.", "AR", "Round", "Solidity", "Sample","Replicate", "Individual", "Muscle")])) {
-
-DataToFilt <- cbind (DataToFilt_CD31, DataToFilt_ENG) %>% as.data.frame (as.is = T)
-for (col in c ("Area", "Circ.", "AR", "Round", "Solidity", "Sample", "Replicate", "Individual", "Muscle")) {
-  X = which (colnames (DataToFilt) == col)
-  if (all (DataToFilt [, X[1]] == DataToFilt [, X[2]])) DataToFilt [, X[2]] = NULL
-}
+if(all(DataToFilt_ENG[ , c("Area", "Circ.", "AR", "Round", "Solidity", "Sample", "Replicate", "Individual", "Muscle")] == DataToFilt_CD31[, c("Area", "Circ.", "AR", "Round", "Solidity", "Sample","Replicate", "Individual", "Muscle")])) {
+  DataToFilt <- cbind(DataToFilt_CD31, DataToFilt_ENG) %>% as.data.frame(as.is = T)
+  for(col in c("Area", "Circ.", "AR", "Round", "Solidity", "Sample", "Replicate", "Individual", "Muscle")) {
+    X = which(colnames(DataToFilt) == col)
+    if(all(DataToFilt[, X[1]] == DataToFilt[, X[2]])) DataToFilt[, X[2]] = NULL
+  }
 }
 
 # Calculating the area positive for CD31
 AreaCD31 <- DataToFilt %>%
-  group_by (Muscle, Individual, Replicate) %>%
-  summarise (AreaCD31 = sum (Area))
+  group_by(Muscle, Individual, Replicate) %>%
+  summarise(AreaCD31 = sum(Area))
 
 # %CD31 area
-ORDER <- c ("GAL" = 2, "SEM" = 1)
-col.muscle <- c ("GL" = "#999999", "STM" = "#0066FF") # Abbreviations based on the paper
-ggplot (merge (merge (No_Area_Fibers, AreaCD31), FinalSamples) %>%
-          mutate (Order = ORDER [match (Muscle, names (ORDER))]) %>%
-          mutate (Muscle = ifelse (Muscle == "GAL", "GL", "STM")) %>%
-          mutate (Pro_CD31Area = AreaCD31*100/AreaFiber),
-        aes (x = reorder (Muscle, Order), y = Pro_CD31Area, fill = Muscle)) + 
-  geom_boxplot (position = position_dodge(0.8), alpha = 0.5) +
-  stat_summary (fun.y = mean, color = "darkred", position = position_dodge(0.75),
+ORDER <- c("GAL" = 2, "SEM" = 1)
+col.muscle <- c("GL" = "#999999", "STM" = "#0066FF") # Abbreviations based on the paper
+ggplot(merge(merge(No_Area_Fibers, AreaCD31), FinalSamples) %>%
+          mutate(Order = ORDER[match(Muscle, names(ORDER))]) %>%
+          mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")) %>%
+          mutate(Pro_CD31Area = AreaCD31*100/AreaFiber),
+        aes(x = reorder(Muscle, Order), y = Pro_CD31Area, fill = Muscle)) + 
+  geom_boxplot(position = position_dodge(0.8), alpha = 0.5) +
+  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
                 geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual (values = col.muscle) +
-  theme_bw () + labs (fill = element_blank(), y = "CD31 positive area (%)")  +
-  theme (panel.grid = element_blank (), axis.text = element_text (size = 12), 
-         axis.title.x = element_blank (), axis.title.y = element_text (size = 12), 
-         axis.text.x.bottom = element_text (vjust = 0.5), axis.ticks = element_blank (),
+  scale_fill_manual(values = col.muscle) +
+  theme_bw() + labs(fill = element_blank(), y = "CD31 positive area(%)")  +
+  theme(panel.grid = element_blank(), axis.text = element_text(size = 12), 
+         axis.title.x = element_blank(), axis.title.y = element_text(size = 12), 
+         axis.text.x.bottom = element_text(vjust = 0.5), axis.ticks = element_blank(),
          legend.position = "NULL")
 
-
-flm <- as.formula ("Pro_CD31Area ~ 0 + Muscle + (1|Individual)")
-MM <- lmerTest::lmer (flm,
-                      # weights = Filt1_3,
-                      data = merge (merge (No_Area_Fibers, AreaCD31), FinalSamples) %>%
-                     mutate (Order = ORDER [match (Muscle, names (ORDER))]) %>%
-                     mutate (Muscle = ifelse (Muscle == "GAL", "GL", "STM")) %>%
-                     mutate (Pro_CD31Area = AreaCD31*100/AreaFiber))
-print (anova (MM)["Muscle",]["Pr(>F)"])
+flm <- as.formula("Pro_CD31Area ~ 0 + Muscle +(1|Individual)")
+MM <- lmerTest::lmer(flm, data = merge(merge(No_Area_Fibers, AreaCD31), FinalSamples) %>% 
+                                              mutate(Order = ORDER[match(Muscle, names(ORDER))]) %>%
+                                              mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")) %>%
+                                              mutate(Pro_CD31Area = AreaCD31*100/AreaFiber))
+print(anova(MM)["Muscle",]["Pr(>F)"])
 #           Pr(>F)    
 # Muscle 8.783e-09 ***
-print (fixef (MM))
+print(fixef(MM))
 # MuscleGL MuscleSTM 
 # 2.165429  1.358284
 
 ## Filtering 
 DataToFilt_CircArea <- DataToFilt %>%
-  filter (Circ. > 0.5) %>%
-  filter (3 < Area) %>%
-  filter (Area < 51)
+  filter(Circ. > 0.5) %>%
+  filter(3 < Area) %>%
+  filter(Area < 51)
 
-DataToFilt$Included <- ifelse (paste (DataToFilt$id_CD31, DataToFilt$Area, DataToFilt$Circ., DataToFilt$Max_CD31, DataToFilt$Min_CD31) %in% paste (DataToFilt_CircArea$id_CD31, DataToFilt_CircArea$Area, DataToFilt_CircArea$Circ., DataToFilt_CircArea$Max_CD31, DataToFilt_CircArea$Min_CD31), 1, 0)
+DataToFilt$Included <- ifelse(paste(DataToFilt$id_CD31, DataToFilt$Area, DataToFilt$Circ., DataToFilt$Max_CD31, DataToFilt$Min_CD31) %in% paste(DataToFilt_CircArea$id_CD31, DataToFilt_CircArea$Area, DataToFilt_CircArea$Circ., DataToFilt_CircArea$Max_CD31, DataToFilt_CircArea$Min_CD31), 1, 0)
 
-colnames (DataToFilt) <- gsub ("_CD31", "", colnames(DataToFilt))
+colnames(DataToFilt) <- gsub("_CD31", "", colnames(DataToFilt))
 
 # Keeping capillaries positive for both CD31 and ENG
 DataToFilt_CircArea_ENG <- DataToFilt_CircArea %>%
-  filter (Mean_ENG != 0)
+  filter(Mean_ENG != 0)
 
 # Number of capillaries
-NoCapillaries <- merge (DataToFilt_CircArea %>%
-                     count (Muscle, Individual, Replicate) %>%
-                     rename (NoCD31 = n),
+NoCapillaries <- merge(DataToFilt_CircArea %>%
+                     count(Muscle, Individual, Replicate) %>%
+                     rename(NoCD31 = n),
                      DataToFilt_CircArea_ENG %>%
-                       count (Muscle, Individual, Replicate) %>%
-                       rename (NoCD31_ENG = n))
+                       count(Muscle, Individual, Replicate) %>%
+                       rename(NoCD31_ENG = n))
 
 # Table includes the number of capillaries before and after filtering
-AreaFibers_NoCapillaries <- merge (merge (NoCapillaries, No_Area_Fibers) %>%
-  mutate (ratio =  NoCD31*100/AreaFiber,
+AreaFibers_NoCapillaries <- merge(merge(NoCapillaries, No_Area_Fibers) %>%
+  mutate(ratio =  NoCD31*100/AreaFiber,
           Filtered_ratio = NoCD31_ENG*100/AreaFiber), FinalSamples) 
 
 # Capilary density
-ggplot (AreaFibers_NoCapillaries %>%
-          mutate (Order = ORDER [match (Muscle, names (ORDER))]) %>%
-          mutate (Muscle = ifelse (Muscle == "GAL", "GL", "STM")),
-        aes (x = reorder (Muscle, Order), y = Filtered_ratio, fill = Muscle)) + 
-  geom_boxplot (position = position_dodge(0.8), alpha = 0.5) +
-  stat_summary (fun.y = mean, color = "darkred", position = position_dodge(0.75),
+ggplot(AreaFibers_NoCapillaries %>%
+          mutate(Order = ORDER[match(Muscle, names(ORDER))]) %>%
+          mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")),
+        aes(x = reorder(Muscle, Order), y = Filtered_ratio, fill = Muscle)) + 
+  geom_boxplot(position = position_dodge(0.8), alpha = 0.5) +
+  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
                 geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual (values = col.muscle) +
-  theme_bw () + labs (fill = element_blank(), y = "Capillary density")  +
-  theme (panel.grid = element_blank (), axis.text = element_text (size = 12), 
-         axis.title.x = element_blank (), axis.title.y = element_text (size = 12), 
-         axis.text.x.bottom = element_text (vjust = 0.5), axis.ticks = element_blank (),
+  scale_fill_manual(values = col.muscle) +
+  theme_bw() + labs(fill = element_blank(), y = "Capillary density")  +
+  theme(panel.grid = element_blank(), axis.text = element_text(size = 12), 
+         axis.title.x = element_blank(), axis.title.y = element_text(size = 12), 
+         axis.text.x.bottom = element_text(vjust = 0.5), axis.ticks = element_blank(),
          legend.position = "NULL")
 
-flm <- as.formula ("Filtered_ratio ~ 0 + Muscle + (1|Individual)")
-MM <- lmerTest::lmer (flm,
+flm <- as.formula("Filtered_ratio ~ 0 + Muscle +(1|Individual)")
+MM <- lmerTest::lmer(flm,
                       # weights = Filt1_3,
                       data = AreaFibers_NoCapillaries)
-print (anova (MM)["Muscle",]["Pr(>F)"])
+print(anova(MM)["Muscle",]["Pr(>F)"])
 #           Pr(>F)    
 # Muscle 2.743e-09 ***
-print (fixef (MM))
+print(fixef(MM))
 #  MuscleGAL  MuscleSEM 
 # 0.03033244 0.02323773 
 
 # logCPM CD31
-Data <- new.env (); load ("dataAnalyses/output/batchMusCorrectedAllData.RData", envir = Data)
+Data <- new.env(); load("../dataAnalyses/outputs/correctedGenesDatasetToAnalysis.RData", envir = Data)
 v_BatchMus <- Data$v_BatchMus
-SubsetToPlot <- data.frame (CD31 = v_BatchMus$E [rownames (v_BatchMus) == "ENSG00000261371"],
-                            # ENG = v_BatchMus$E [rownames (v_BatchMus) == "ENSG00000106991"],
-                            Muscle = gsub ("MD[0-9][0-9]_|_Sam.*", "", colnames (v_BatchMus)),
-                            Individual = gsub ("_.*", "", colnames (v_BatchMus)))
+SubsetToPlot <- data.frame(CD31 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000261371"],
+                           # ENG = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000106991"],
+                           Muscle = gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(v_BatchMus)),
+                           Individual = gsub("_.*", "", colnames(v_BatchMus)))
 
-ToPlot <- merge (SubsetToPlot %>% 
+ToPlot <- merge(SubsetToPlot %>% 
                    reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename (Gene = variable), 
+                   rename(Gene = variable), 
                  AreaFibers_NoCapillaries, all.y = T)
 
-ggplot (ToPlot %>% filter (Gene == "CD31") %>%
-          mutate (Order = ORDER [match (Muscle, names (ORDER))]) %>%
-          mutate (Muscle = ifelse (Muscle == "GAL", "GL", "STM"))%>%
-          filter (Individual != "MD28"),
-        aes (x = reorder (Muscle, Order), y = NormalizedExpression, fill = Muscle)) + 
-  geom_boxplot (position = position_dodge(0.8), alpha = 0.5) +
-  stat_summary (fun.y = mean, color = "darkred", position = position_dodge(0.75),
+ggplot(ToPlot %>% filter(Gene == "CD31") %>%
+          mutate(Order = ORDER[match(Muscle, names(ORDER))]) %>%
+          mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM"))%>%
+          filter(Individual != "MD28"),
+        aes(x = reorder(Muscle, Order), y = NormalizedExpression, fill = Muscle)) + 
+  geom_boxplot(position = position_dodge(0.8), alpha = 0.5) +
+  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
                 geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual (values = col.muscle) +
-  theme_bw () + labs (fill = element_blank(), y = expression("LogCPM"~italic ("CD31")))  +
-  theme (panel.grid = element_blank (), axis.text = element_text (size = 12), 
-         axis.title.x = element_blank (), axis.title.y = element_text (size = 12), 
-         axis.text.x.bottom = element_text (vjust = 0.5), axis.ticks = element_blank (),
+  scale_fill_manual(values = col.muscle) +
+  theme_bw() + labs(fill = element_blank(), y = expression("LogCPM"~italic("CD31")))  +
+  theme(panel.grid = element_blank(), axis.text = element_text(size = 12), 
+         axis.title.x = element_blank(), axis.title.y = element_text(size = 12), 
+         axis.text.x.bottom = element_text(vjust = 0.5), axis.ticks = element_blank(),
          legend.position = "NULL")
 ```
 
-
 ```{r}
-sessionInfo ()
+sessionInfo()
 ```

@@ -615,7 +615,7 @@ for(file in c("Raw", "BatchMus")){
             Rowv = T, showRowDendro = F)
   
 }
-save(D_Raw, D_BatchMus, HTseqCount, countAdjBatchMus, file =  "outputs/correctedGenesDatasetToAnalysis.RData")
+save(D_BatchMus, countAdjBatchMus, file =  "outputs/correctedGenesDatasetToAnalysis.RData")
 rm (list = setdiff(ls(), c("D_Raw", "D_BatchMus")))
 ```
 

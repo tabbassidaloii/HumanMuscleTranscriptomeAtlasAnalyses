@@ -14,24 +14,18 @@ editor_options:
 
 ```{r setup, include = FALSE}
 rm(list = ls())
+
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
 if(!"dplyr" %in% installed.packages()) install.packages("dplyr")
 if(!"data.table" %in% installed.packages()) install.packages("data.table")
 if(!"ggplot2" %in% installed.packages()) install.packages("ggplot2")
 if(!"tidyr" %in% installed.packages()) install.packages("tidyr")
 if(!"cowplot" %in% installed.packages()) install.packages("cowplot")
-
-if(!"tibble" %in% installed.packages()) install.packages("tibble")
-if(!"scales" %in% installed.packages()) install.packages("scales")
-if(!require("BiocManager", quietly = TRUE)) install.packages("BiocManager")
-if(!"limma" %in% installed.packages()) BiocManager::install("limma")
-if(!"edgeR" %in% installed.packages()) BiocManager::install("edgeR")
-if(!"biomaRt" %in% installed.packages()) BiocManager::install("biomaRt")
+if(!"lmerTest" %in% installed.packages())install.packages("lmerTest")
 if(!"knitr" %in% installed.packages()) install.packages("knitr")
-if(!"factoextra" %in% installed.packages()) install.packages("factoextra")
-if(!"gplots" %in% installed.packages()) install.packages("gplots")
-if(!"RColorBrewer" %in% installed.packages()) install.packages("RColorBrewer")
-if(!"ggpubr" %in% installed.packages()) install.packages("ggpubr")
 if(!"reshape2" %in% installed.packages()) install.packages("reshape2")
+if(!"ggpubr" %in% installed.packages()) install.packages("ggpubr")
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -39,24 +33,18 @@ suppressPackageStartupMessages({
   library(ggplot2)
   library(tidyr)
   library(cowplot)
-
-  library(scales) 
-  library(dplyr)
-  library(plotly)
+  library(lmerTest)
   library(knitr)
-  library(grid)
   library(ggpubr)
-  library(rgl)
   })
 
 knit_hooks$set(webgl = hook_webgl)
 set.seed(1)
 
-setwd(dirname(rstudioapi::getSourceEditorContext()$path))
-
 # Read all the txt files:
 InputPath = "input/RNAscope/AnalysisParticles/"
 Files <- list.files(path = InputPath, pattern = ".txt", full.names = T, recursive = T)
+
 # Remove image with no signal(MD19)
 Files <- Files[-grep("MD19_GAL_H5_2Tiles_AnalyzeParticles", Files)]
 
@@ -65,10 +53,6 @@ names(DataTable_whole) <- gsub(".*/|_AnalyzeParticles.txt| ", "", Files[grep("An
 
 MyofiberSize <- lapply(Files[grep("ROIs.txt", Files)], read.csv, sep = "\t")
 names(MyofiberSize) <- gsub(".*/|_ROIs.txt| ", "", Files[grep("ROIs.txt", Files)])
-
-col.muscle <- c("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999", 
-                 "SED" = "#0033FF", "SEM" = "#0066FF", "VAL" = "#FF6666", 
-                 "VAM" = "#FF3333")
 ```
 
 Muscles sections of 17 individuals were included in the RNAscope experiment. The samples were imaged and image processing and quantification were done in collaboration with Lennard Voortman. 
@@ -113,7 +97,6 @@ NoFoci <- merge(NoMyofiber, Data_ROI %>%
   count(name = "NoFoci") %>%
   filter(!is.na(Channel)), all = T, by = c("Individual", "Muscle", "Type"))
 
-
 ## Whole ROI
 #Foci Size
 P1 <- ggplot(Data_ROI, aes_string(x = "FociSize")) +
@@ -121,14 +104,12 @@ P1 <- ggplot(Data_ROI, aes_string(x = "FociSize")) +
     theme_bw() + ggtitle("A: Foci Size") +
     theme(legend.position = "none", axis.title = element_blank()) +
     facet_wrap(. ~ Type, scales='free_y', nrow = 2)
-summary(Data_ROI$FociSize)
 
 P2 <- ggplot(Data_ROI %>% filter(FociSize < 6), aes_string(x = "FociSize")) +
     geom_density(alpha = .5,) +
     theme_bw() + ggtitle("B: Foci Size < 6um2") +
     theme(legend.position = "none", axis.title = element_blank()) +
     facet_wrap(Type ~ Channel, scales='free_y', nrow = 2)
-summary(Data_ROI %>% filter(FociSize < 6) %>% .$FociSize)
 
 #Foci Circularity
 P3 <- ggplot(Data_ROI, aes_string(x = "FociCirc")) +
@@ -136,14 +117,12 @@ P3 <- ggplot(Data_ROI, aes_string(x = "FociCirc")) +
     theme_bw() + ggtitle("C: Foci Circ") +
     theme(legend.position = "none", axis.title = element_blank()) +
     facet_wrap(. ~ Type, scales='free_y', nrow = 2)
-summary(Data_ROI$FociCirc)
 
 P4 <- ggplot(Data_ROI %>% filter(FociCirc > 0.85), aes_string(x = "FociCirc")) +
     geom_density(alpha = .5,) +
     theme_bw() + ggtitle("D: Foci Circ > .08") +
     theme(legend.position = "none", axis.title = element_blank()) +
     facet_wrap(Type ~ Channel, scales='free_y', nrow = 2)
-summary(Data_ROI %>% filter(FociCirc > 0.85) %>% .$FociCirc)
 
 (Tosave <- plot_grid(P1, P2, P3, P4, hjust = 0, vjust = 1, ncol = 2, rel_widths = c(1.2, 3)))
 
@@ -180,7 +159,7 @@ P3 <- ggplot(Data_ROI_Filtered, aes_string(x = "FociMFI")) +
     theme_bw() + ggtitle("FociMFI") +
     theme(legend.position = "none", axis.title = element_blank()) +
     facet_wrap(. ~ Type, scales='free_y', nrow = 2)
-(Tosave <- plot_grid(P1, P2, P3, hjust = 0, vjust = 1, ncol = 2))
+(Tosave <- plot_grid(P1, P2, P3, hjust = 0, vjust = 1, ncol = 3))
 
 ## Average number of foci per myofiber(unfiltered data)
 Data_ROI_summary <- Data_ROI %>% 
@@ -204,13 +183,10 @@ Data_ROI_Ave_summary <- merge(NoMyofiber, Data_ROI_summary %>%
                     Median = median(NoFoci)) %>%
   ungroup())
 
-# For paper 
-col.muscle <- c("GL" = "#999999", "GR" = "#0099FF", "RF" = "#FF9999", 
-                 "STD" = "#0033FF", "STM" = "#0066FF", "VL" = "#FF6666", 
-                 "VM" = "#FF3333")
+# For paper
+col.muscle <- c("GL" = "#999999", "STM" = "#0066FF") # Abbreviations based on the paper
 
-
-P1 <- ggplot(Data_ROI_Ave_summary %>%
+(P1 <- ggplot(Data_ROI_Ave_summary %>%
                 mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")),
         aes(x = Gene, y = Mean, fill = Muscle)) + 
   geom_boxplot(position = position_dodge(0.8)) + 
@@ -220,7 +196,7 @@ P1 <- ggplot(Data_ROI_Ave_summary %>%
   theme_bw() + labs(fill = element_blank(), y = "Average number of foci") +
   theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
          axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
+         facet_wrap(. ~ Type, nrow = 1))
 
 ## Average number of foci per myofiber(filtered data)
 Data_ROI_Filtered_summary <- Data_ROI_Filtered %>% 
@@ -237,10 +213,9 @@ Data_ROI_Filtered_summary <- pivot_longer(Data_ROI_Filtered_summary,
                                            cols = c(HOXA10, HOXA11, HOXC10), 
                                   names_to = "Gene", values_to = "NoFoci")
 
-
-
 (Tosave <- ggplot(Data_ROI_Filtered_summary %>%
-          mutate(Sample = paste0(Individual, Muscle, Type)), 
+          mutate(Sample = paste0(Individual, Muscle, Type),
+                Muscle = ifelse(Muscle == "GAL", "GL", "STM")), 
         aes(x = NoFoci, group = Sample, color = Muscle)) +
    geom_density(adjust=1.5, alpha=.4) +
    theme_bw() + labs(x = "Number of foci per myofiber") +
@@ -260,7 +235,8 @@ Data_ROI_Filtered_summary <- pivot_longer(Data_ROI_Filtered_summary,
          axis.text.x.bottom = element_text(angle = 90, vjust = 0.5)) +
          facet_grid(Muscle ~ Type, scales = "free", space = "free"))
 
-(Tosave <- ggplot(Data_ROI_Filtered_summary,
+(Tosave <- ggplot(Data_ROI_Filtered_summary%>%
+                mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")),
         aes(x = Individual, y = NoFoci, fill = Muscle)) + 
   geom_boxplot(position = position_dodge(0.8)) +
   # stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
@@ -274,7 +250,8 @@ Data_ROI_Filtered_summary <- pivot_longer(Data_ROI_Filtered_summary,
 
 (Tosave <- ggplot(Data_ROI_Filtered_summary %>%
                      filter(!Individual %in% c("MD13", "MD14", "MD17", "MD22", "MD27")) %>%
-                     filter(Gene != "HOXA11"),
+                     filter(Gene != "HOXA11")%>%
+                mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")),
         aes(x = Individual, y = NoFoci, fill = Muscle)) + 
   geom_boxplot(position = position_dodge(0.8)) +
   # stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
@@ -286,8 +263,6 @@ Data_ROI_Filtered_summary <- pivot_longer(Data_ROI_Filtered_summary,
          axis.text.x.bottom = element_text(angle = 90, vjust = 0.5)) +
          facet_grid(Gene ~ Type, scales = "free", space = "free"))
 
-
-
 # Association between myofiber size and number of foci
 cor(Data_ROI_Filtered_summary$FiberSize, Data_ROI_Filtered_summary$NoFoci)
 Data_ROI_Filtered_Ave_summary <- merge(NoMyofiber, Data_ROI_Filtered_summary %>% 
@@ -296,7 +271,8 @@ Data_ROI_Filtered_Ave_summary <- merge(NoMyofiber, Data_ROI_Filtered_summary %>%
                     Median = median(NoFoci)) %>%
   ungroup(), all = T)
 
-P2 <- ggplot(Data_ROI_Filtered_Ave_summary,
+P2 <- ggplot(Data_ROI_Filtered_Ave_summary%>%
+                mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")),
         aes(x = Gene, y = Mean, fill = Muscle)) + 
   geom_boxplot(position = position_dodge(0.8)) +
   stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
@@ -310,7 +286,8 @@ P2 <- ggplot(Data_ROI_Filtered_Ave_summary,
 
 (Tosave <- ggplot(Data_ROI_Filtered_Ave_summary %>%
                      filter(!Individual %in% c("MD13", "MD14", "MD17", "MD22", "MD27")) %>%
-                     filter(Gene != "HOXA11"),
+                     filter(Gene != "HOXA11")%>%
+                mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")),
         aes(x = Gene, y = Mean, fill = Muscle)) + 
   geom_boxplot(position = position_dodge(0.8)) +
   stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
@@ -321,8 +298,8 @@ P2 <- ggplot(Data_ROI_Filtered_Ave_summary,
          axis.title.x = element_blank(), legend.position = "bottom") +
          facet_wrap(. ~ Type, nrow = 1))
 
-ORDER <- c("GL" = 7, "RF" = 4, "VL" = 5, "VM" = 6, 
-            "STM" = 2, "STD" = 3, "GR" = 1)
+ORDER <- c("GL" = 2, "STM" = 1)
+
 (Tosave <- ggplot(Data_ROI_Filtered_Ave_summary %>%
                      filter(!Individual %in% c("MD13", "MD14", "MD17", "MD22", "MD27")) %>%
                      filter(Gene != "HOXA11") %>%
@@ -349,72 +326,23 @@ ToStat <- Data_ROI_Filtered_Ave_summary %>%
                      mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM"))%>%
                      mutate(Order = ORDER[match(Muscle, names(ORDER))])
 
-library(lmerTest)
 flm <- as.formula("Mean ~ 0 + Muscle +(1|Individual)")
 MM <- lmerTest::lmer(flm,
-                      # weights = Filt1_3,
                       data = ToStat %>% filter(Gene == "HOXA10"))
 print(anova(MM)["Muscle",]["Pr(>F)"])
-#           Pr(>F)    
-# Muscle 7.07e-09 ***
 print(fixef(MM))
-#  MuscleGAL  MuscleSEM 
-# 13.70536  19.33142 
 MM <- lmerTest::lmer(flm,
-                      # weights = Filt1_3,
                       data = ToStat %>% filter(Gene == "HOXC10"))
 print(anova(MM)["Muscle",]["Pr(>F)"])
-#           Pr(>F)    
-# Muscle 2.123e-10 ***
 print(fixef(MM))
-#  MuscleGAL  MuscleSEM 
-# 10.41984  14.93382 
 
-
-Data <- new.env(); load("F://Corona-WorkingFromHome/Human-Muscle-Types/OurDataset/MuscleDAtaset/Outputs/BatchMusCorrectedAllData.RData", envir = Data)
+Data <- new.env(); load("../dataAnalyses/outputs/correctedGenesDatasetToAnalysis.RData", envir = Data)
 v_BatchMus <- Data$v_BatchMus
 SubsetToPlot <- data.frame(HOXA10 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000253293"],
                             HOXA11 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000005073"],
                             HOXC10 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000180818"],
                             Muscle = gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(v_BatchMus)),
                             Individual = gsub("_.*", "", colnames(v_BatchMus)))
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P1 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Mean, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Average number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_Filtered_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P2 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Mean, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Average number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 2, labels = c("Before filtering", "After filtering")))
-
-
 ToPlot <- merge(SubsetToPlot %>% 
                    reshape2::melt(value.name = "NormalizedExpression") %>%
                    rename(Gene = variable), 
@@ -457,8 +385,6 @@ ggsave(Tosave, device = "tiff", units = "cm", width = 9, height = 12, filename =
     facet_wrap(~ Gene, nrow = 2))
 ggsave(Tosave, device = "tiff", units = "cm", width = 8, height = 11, filename = "figures/HOX_Gen.tif")
 
-
-
 Data_ROI_Filtered_Ave_summary <- Data_ROI_Filtered_Ave_summary %>%
   select(-Median) %>%
   pivot_wider(names_from = Gene, values_from = Mean) 
@@ -480,7 +406,6 @@ rownames(comparison) <- NULL
 Data_ROI_Filtered_Ave_summary <- Data_ROI_Filtered_Ave_summary %>%
   filter(!Individual %in% c("MD13", "MD14", "MD17", "MD22", "MD27")) %>%
   filter(Gene != "HOXA11")
-library(lmerTest)
 comparison <- c()
 for(Gene in c("HOXA10", "HOXC10")){
     flm <- as.formula(paste(noquote(Gene), "~ 0 + Muscle +(1|Individual)"))
@@ -492,858 +417,10 @@ for(Gene in c("HOXA10", "HOXC10")){
     x <- data.frame(Gene, anova(MM)["Muscle",]["Pr(>F)"], fixef(MM)["MuscleSEM"], fixef(MM)["MuscleGAL"])
     comparison <- rbind(comparison, x)
 }
-colnames(comparison)[2:4] <- c("Pr(>F)", "Mean_SEM", "Mean_GAL") 
+colnames(comparison)[2:4] <- c("Pr(>F)", "Mean_SEM", "Mean_GAL")
 rownames(comparison) <- NULL
+#     Gene       Pr(>F) Mean_SEM Mean_GAL
+# 1 HOXA10 2.582160e-07 5.661107  4.54487
+# 2 HOXC10 1.310777e-07 4.565500  3.42333
 
-
-
-
-
-
-
-
-
-##(2) Median number of foci per myofiber(unfiltered data)
-Data_ROI_Ave_summary <- merge(NoMyofiber, Data_ROI_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup())
-
-P1 <- ggplot(Data_ROI_Ave_summary,
-        aes(x = Gene, y = Median, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) + 
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Median number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-
-## Median number of foci per myofiber(filtered data)
-Data_ROI_Filtered_Ave_summary <- merge(NoMyofiber, Data_ROI_Filtered_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup(), all = T)
-
-P2 <- ggplot(Data_ROI_Filtered_Ave_summary,
-        aes(x = Gene, y = Median, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) +
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Median number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 1, labels = c("Before filtering", "After filtering")))
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P1 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Median, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Median number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_Filtered_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P2 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Median, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Median number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 2, labels = c("Before filtering", "After filtering")))
-
-Data_ROI_Filtered_Median_summary <- Data_ROI_Filtered_Ave_summary %>%
-  select(-Mean) %>%
-  pivot_wider(names_from = Gene, values_from = Median) 
-
-comparison <- c()
-for(Gene in c("HOXA10", "HOXA11", "HOXC10")){
-    flm <- as.formula(paste(noquote(Gene), "~ 0 + Muscle +(1|Individual)"))
-    MM <- lmerTest::lmer(flm, weights = NoMyofibers,
-                              data = Data_ROI_Filtered_Median_summary %>% filter(Type == "Probes"))
-    print(Gene)
-    print(anova(MM)["Muscle",]["Pr(>F)"])
-    print(fixef(MM))
-    x <- data.frame(Gene, anova(MM)["Muscle",]["Pr(>F)"], fixef(MM)["MuscleSEM"], fixef(MM)["MuscleGAL"])
-    comparison <- rbind(comparison, x)
-}
-colnames(comparison)[2:4] <- c("Pr(>F)", "Mean_SEM", "Mean_GAL") 
-rownames(comparison) <- NULL
-
-## Total number of foci / Total number of myofibers
-# P1 <- ggplot(NoFoci,
-#         aes(x = Channel, y = NoFoci/NoMyofibers, fill = Muscle)) + 
-#   geom_boxplot(position = position_dodge(0.8)) +
-#   stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-#              geom = "point", size = 3, show.legend = FALSE) +
-#   scale_fill_manual(values = col.muscle) +
-#   theme_bw() + labs(fill = element_blank(), y = "No. Foci/No. Myofibers") +
-#   theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-#          axis.title.x = element_blank(), legend.position = "bottom") +
-#          facet_wrap(. ~ Type, nrow = 1)
-# 
-# P2 <- ggplot(NoFoci_Filtered,
-#         aes(x = Channel, y = NoFoci/NoMyofibers, fill = Muscle)) + 
-#   geom_boxplot(position = position_dodge(0.8)) +
-#   stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-#              geom = "point", size = 3, show.legend = FALSE) +
-#   scale_fill_manual(values = col.muscle) +
-#   theme_bw() + labs(fill = element_blank(), y = "No. Foci/No. Myofibers") +
-#   theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-#          axis.title.x = element_blank(), legend.position = "bottom") +
-#          facet_wrap(. ~ Type, nrow = 1)
-#(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 1, labels = c("Before filtering", "After filtering")))
-# 
-# ToPlot <- merge(SubsetToPlot %>% 
-#                    reshape2::melt(value.name = "NormalizedExpression") %>%
-#                    rename(Channel = variable), 
-#                  NoFoci %>% 
-#                    filter(Type == "Probes"))
-# 
-# P1 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = NoFoci/NoMyofibers, color = Muscle)) +
-#   geom_point(size = 1.5) +
-#   scale_color_manual(values = col.muscle) +
-#   geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-#   labs(y = "No. foci / No. myofibers", x = "Normalized expression") +
-#   theme(panel.grid = element_blank(), 
-#          axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-#          axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-#          strip.text = element_text(size = 11, face = "bold")) +
-#   facet_wrap(. ~ Channel, nrow = 3, scales = "free")
-# 
-# ToPlot <- merge(SubsetToPlot %>% 
-#                    reshape2::melt(value.name = "NormalizedExpression") %>%
-#                    rename(Channel = variable), 
-#                  NoFoci_Filtered %>% 
-#                    filter(Type == "Probes"))
-# 
-# P2 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = NoFoci/NoMyofibers, color = Muscle)) +
-#   geom_point(size = 1.5) +
-#   scale_color_manual(values = col.muscle) +
-#   geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-#   labs(y = "No. foci / No. myofibers", x = "Normalized expression") +
-#   theme(panel.grid = element_blank(), 
-#          axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-#          axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-#          strip.text = element_text(size = 11, face = "bold")) +
-#   facet_wrap(. ~ Channel, nrow = 3, scales = "free")
-#(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 2, labels = c("Before filtering", "After filtering")))
-# 
-# 
-# NoFoci_Filtered <- NoFoci_Filtered %>%
-#   mutate(ratio = NoFoci/NoMyofibers) %>%
-#   select(-NoFoci) %>%
-#   pivot_wider(names_from = Channel, values_from = ratio) 
-# library(lme4)
-# comparison <- c()
-# for(Gene in c("HOXA10", "HOXA11", "HOXC10")){
-#     flm <- as.formula(paste(noquote(Gene), "~ 0 + Muscle +(1|Individual)"))
-#     MM <- lmerTest::lmer(flm, weights = NoMyofibers,
-#                               data = NoFoci_Filtered %>% filter(Type == "Probes"))
-#     print(Gene)
-#     print(anova(MM)["Muscle",]["Pr(>F)"])
-#     print(fixef(MM))
-#     x <- data.frame(Gene, anova(MM)["Muscle",]["Pr(>F)"], fixef(MM)["MuscleSEM"], fixef(MM)["MuscleGAL"])
-#     comparison <- rbind(comparison, x)
-# }
-# colnames(comparison)[2:4] <- c("Pr(>F)", "Mean_SEM", "Mean_GAL") 
-# rownames(comparison) <- NULL
-}
-```
-
-```{r ROI5, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 12, fig.width = 4}
-Data_ROI_5 <- rbindlist(DataTable_ROI5, idcol = TRUE) %>%
-  dplyr::select(-X) %>%
-  rename(Sample = .id, FociSize = Area, FociMFI = Mean, FociX = XM, FociY = YM, FociCirc = Circ.) %>%
-  mutate(Sample = gsub("^GRA", "MD??_GRA", Sample)) %>%
-  mutate(Channel = gsub("-.*", "", Label),
-          ROI_pos = gsub(".*:", "", Label),
-          Muscle = gsub("_.*", "", gsub("^[^_]*_", "", Sample)),
-          Muscle = gsub("GAl", "GAL", Muscle),
-          Individual = gsub("_.*", "", Sample),
-          Type = gsub(".*_Neg.*", "Neg", gsub(".*_H.*", "Probes", Sample))) %>%
-  dplyr::select(Sample, Individual, Muscle, Type, ROI_pos, 
-                 Channel, FociSize, FociCirc, FociMFI, FociX, FociY)
-Data_ROI_5$Channel[Data_ROI_5$Channel == "C2"] = "HOXA10"
-Data_ROI_5$Channel[Data_ROI_5$Channel == "C4"] = "HOXC10"
-Data_ROI_5$Channel[Data_ROI_5$Channel == "C5"] = "HOXA11"
-
-Data_ROI_5 <- merge(Data_ROI_size %>%
-                       filter(ROI == 5) %>% select(-ROI), Data_ROI_5, all = T, sort = F)
-
-
-## ROI -5
-NoFoci <- merge(NoMyofiber, Data_ROI_5 %>%
-  group_by(Individual, Muscle, Type, Channel) %>%
-  count(name = "NoFoci") %>%
-  filter(!is.na(Channel)), all = T, by = c("Individual", "Muscle", "Type"))
-
-
-if(TRUE){
-#Foci Size
-P1 <- ggplot(Data_ROI_5, aes_string(x = "FociSize")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("A: Foci Size") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free_y', nrow = 2)
-summary(Data_ROI_5$FociSize)
-
-P2 <- ggplot(Data_ROI_5 %>% filter(FociSize < 6), aes_string(x = "FociSize")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("B: Foci Size < 6um2") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(Type ~ Channel, scales='free_y', nrow = 2)
-summary(Data_ROI_5 %>% filter(FociSize < 6) %>% .$FociSize)
-
-#Foci Circularity
-P3 <- ggplot(Data_ROI_5, aes_string(x = "FociCirc")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("C: Foci Circ") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free_y', nrow = 2)
-summary(Data_ROI_5$FociCirc)
-
-P4 <- ggplot(Data_ROI_5 %>% filter(FociCirc > 0.85), aes_string(x = "FociCirc")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("D: Foci Circ > .08") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(Type ~ Channel, scales='free_y', nrow = 2)
-summary(Data_ROI_5 %>% filter(FociCirc > 0.85) %>% .$FociCirc)
-
-(Tosave <- plot_grid(P1, P2, P3, P4, hjust = 0, vjust = 1, ncol = 2, rel_widths = c(1.2, 3)))
-
-##Foci MFI
-(Tosave <- ggplot(Data_ROI_5, aes_string(x = "FociMFI")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("Foci MFI") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(Type ~ Channel, scales='free_y', nrow = 2))
-(Tosave <- ggplot(Data_ROI_5, aes_string(x = "FociMFI")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("Foci MFI") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(Type ~ Channel, scales='free', nrow = 2))
-
-Data_ROI_5_Filtered <- Data_ROI_5 %>%
-  filter(FociSize < 3.5 & FociCirc > 0.98) 
-Data_ROI_5_Filtered$FociMFI[Data_ROI_5_Filtered$Channel == "HOXC10"] <- ifelse(
-  Data_ROI_5_Filtered$FociMFI[Data_ROI_5_Filtered$Channel == "HOXC10"] < 75, 0, Data_ROI_5_Filtered$FociMFI[Data_ROI_5_Filtered$Channel == "HOXC10"])
-Data_ROI_5_Filtered$FociMFI[Data_ROI_5_Filtered$Channel == "HOXA10"] <- ifelse(
-  Data_ROI_5_Filtered$FociMFI[Data_ROI_5_Filtered$Channel == "HOXA10"] < 300, 0, Data_ROI_5_Filtered$FociMFI[Data_ROI_5_Filtered$Channel == "HOXA10"])
-Data_ROI_5_Filtered <- merge(Data_ROI_5 %>% dplyr::select(Sample:FiberY) %>% unique(), 
-                            Data_ROI_5_Filtered %>%
-                              filter(FociMFI != 0), all = T)
-
-(Data_ROI_5_Filtered %>% filter(!is.na(Channel)) %>% dim())[1] /(Data_ROI_5 %>% filter(!is.na(Channel)) %>% dim())[1]
-
-NoFoci_Filtered <- merge(NoFoci %>% select(-NoFoci), Data_ROI_5_Filtered %>%
-  group_by(Individual, Muscle, Type, Channel) %>%
-  count(name = "NoFoci") %>%
-  filter(!is.na(Channel)), all = T)
-NoFoci_Filtered$NoFoci[is.na(NoFoci_Filtered$NoFoci)] = 0
-
-P1 <- ggplot(Data_ROI_5_Filtered, aes_string(x = "FociCirc")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("Foci Circ") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free', nrow = 3)
-P2 <- ggplot(Data_ROI_5_Filtered, aes_string(x = "FociSize")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("Foci Size") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free', nrow = 3)
-P3 <- ggplot(Data_ROI_5_Filtered, aes_string(x = "FociMFI")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("FociMFI") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free_y', nrow = 2)
-(Tosave <- plot_grid(P1, P2, P3, hjust = 0, vjust = 1, ncol = 2))
-
-## Average number of foci per myofiber(unfiltered data)
-Data_ROI_5_summary <- Data_ROI_5 %>% 
-  # filter(!is.na(Channel)) %>%
-  group_by(Individual, Muscle, ROI_pos, Type, FiberSize, FiberCirc, Channel) %>%
-  dplyr::summarise(NoFoci = n()) %>%
-  ungroup()
-Data_ROI_5_summary <- pivot_wider(Data_ROI_5_summary, names_from = Channel, values_from = NoFoci) 
-Data_ROI_5_summary$`NA` <- NULL
-Data_ROI_5_summary$HOXA10[is.na(Data_ROI_5_summary$HOXA10)] = 0
-Data_ROI_5_summary$HOXA11[is.na(Data_ROI_5_summary$HOXA11)] = 0
-Data_ROI_5_summary$HOXC10[is.na(Data_ROI_5_summary$HOXC10)] = 0
-Data_ROI_5_summary <- pivot_longer(Data_ROI_5_summary, cols = c(HOXA10, HOXA11, HOXC10), 
-                                  names_to = "Gene", values_to = "NoFoci")
-
-# Association between myofiber size and number of foci
-cor(Data_ROI_5_summary$FiberSize, Data_ROI_5_summary$NoFoci)
-Data_ROI_5_Ave_summary <- merge(NoMyofiber, Data_ROI_5_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup())
-
-# For paper 
-# col.muscle <- c("GAL" = "#FF3333", "GRA" = "#66FFFF", "REF" = "#FF66FF", 
-#                  "SED" = "#009999", "SEM" = "#33CCCC", "VAL" = "#FF99FF", 
-#                  "VAM" = "#FFCCFF")
-col.muscle <- c("GL" = "#FF3333", "GR" = "#66FFFF", "RF" = "#FF66FF", 
-                 "STD" = "#009999", "STM" = "#33CCCC", "VL" = "#FF99FF", 
-                 "VM" = "#FFCCFF")
-
-P1 <- ggplot(Data_ROI_5_Ave_summary,
-        aes(x = Gene, y = Mean, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) + 
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Average number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-
-## Average number of foci per myofiber(filtered data)
-Data_ROI_5_Filtered_summary <- Data_ROI_5_Filtered %>% 
-  group_by(Individual, Muscle, ROI_pos, Type, FiberSize, FiberCirc, Channel) %>%
-  dplyr::summarise(NoFoci = n()) %>%
-  ungroup()
-
-Data_ROI_5_Filtered_summary <- pivot_wider(Data_ROI_5_Filtered_summary, names_from = Channel, values_from = NoFoci) 
-Data_ROI_5_Filtered_summary$`NA` <- NULL
-Data_ROI_5_Filtered_summary$HOXA10[is.na(Data_ROI_5_Filtered_summary$HOXA10)] = 0
-Data_ROI_5_Filtered_summary$HOXA11[is.na(Data_ROI_5_Filtered_summary$HOXA11)] = 0
-Data_ROI_5_Filtered_summary$HOXC10[is.na(Data_ROI_5_Filtered_summary$HOXC10)] = 0
-Data_ROI_5_Filtered_summary <- pivot_longer(Data_ROI_5_Filtered_summary, 
-                                           cols = c(HOXA10, HOXA11, HOXC10), 
-                                  names_to = "Gene", values_to = "NoFoci")
-
-
-# Association between myofiber size and number of foci
-cor(Data_ROI_5_Filtered_summary$FiberSize, Data_ROI_5_Filtered_summary$NoFoci)
-Data_ROI_5_Filtered_Ave_summary <- merge(NoMyofiber, Data_ROI_5_Filtered_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup(), all = T)
-
-P2 <- ggplot(Data_ROI_5_Filtered_Ave_summary,
-        aes(x = Gene, y = Mean, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) +
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Average number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 1, labels = c("Before filtering", "After filtering")))
-
-Data <- new.env(); load("outputs/correctedGenesDatasetToAnalysis.RData", envir = Data)
-v_BatchMus <- Data$v_BatchMus
-SubsetToPlot <- data.frame(HOXA10 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000253293"],
-                            HOXA11 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000005073"],
-                            HOXC10 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000180818"],
-                            Muscle = gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(v_BatchMus)),
-                            Individual = gsub("_.*", "", colnames(v_BatchMus)))
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_5_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P1 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Mean, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Average number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_5_Filtered_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P2 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Mean, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Average number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 2, labels = c("Before filtering", "After filtering")))
-
-Data_ROI_5_Filtered_Ave_summary <- Data_ROI_5_Filtered_Ave_summary %>%
-  select(-Median) %>%
-  pivot_wider(names_from = Gene, values_from = Mean) 
-
-comparison <- c()
-for(Gene in c("HOXA10", "HOXA11", "HOXC10")){
-    flm <- as.formula(paste(noquote(Gene), "~ 0 + Muscle +(1|Individual)"))
-    MM <- lmerTest::lmer(flm, weights = NoMyofibers,
-                              data = Data_ROI_5_Filtered_Ave_summary %>% filter(Type == "Probes"))
-    print(Gene)
-    print(anova(MM)["Muscle",]["Pr(>F)"])
-    print(fixef(MM))
-    x <- data.frame(Gene, anova(MM)["Muscle",]["Pr(>F)"], fixef(MM)["MuscleSEM"], fixef(MM)["MuscleGAL"])
-    comparison <- rbind(comparison, x)
-}
-colnames(comparison)[2:4] <- c("Pr(>F)", "Mean_SEM", "Mean_GAL") 
-rownames(comparison) <- NULL
-
-
-##(2) Median number of foci per myofiber(unfiltered data)
-Data_ROI_5_Ave_summary <- merge(NoMyofiber, Data_ROI_5_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup())
-
-P1 <- ggplot(Data_ROI_5_Ave_summary,
-        aes(x = Gene, y = Median, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) + 
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Median number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-
-## Median number of foci per myofiber(filtered data)
-Data_ROI_5_Filtered_Ave_summary <- merge(NoMyofiber, Data_ROI_5_Filtered_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup(), all = T)
-
-P2 <- ggplot(Data_ROI_5_Filtered_Ave_summary,
-        aes(x = Gene, y = Median, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) +
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Median number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 1, labels = c("Before filtering", "After filtering")))
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_5_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P1 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Median, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Median number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_5_Filtered_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P2 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Median, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Median number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 2, labels = c("Before filtering", "After filtering")))
-
-Data_ROI_5_Filtered_Median_summary <- Data_ROI_5_Filtered_Ave_summary %>%
-  select(-Mean) %>%
-  pivot_wider(names_from = Gene, values_from = Median) 
-
-comparison <- c()
-for(Gene in c("HOXA10", "HOXA11", "HOXC10")){
-    flm <- as.formula(paste(noquote(Gene), "~ 0 + Muscle +(1|Individual)"))
-    MM <- lmerTest::lmer(flm, weights = NoMyofibers,
-                              data = Data_ROI_5_Filtered_Median_summary %>% filter(Type == "Probes"))
-    print(Gene)
-    print(anova(MM)["Muscle",]["Pr(>F)"])
-    print(fixef(MM))
-    x <- data.frame(Gene, anova(MM)["Muscle",]["Pr(>F)"], fixef(MM)["MuscleSEM"], fixef(MM)["MuscleGAL"])
-    comparison <- rbind(comparison, x)
-}
-colnames(comparison)[2:4] <- c("Pr(>F)", "Mean_SEM", "Mean_GAL") 
-rownames(comparison) <- NULL
-}
-```
-
-```{r ROI10, echo = FALSE, message = FALSE, warning = FALSE, comment = F, fig.show = FALSE, fig.height = 12, fig.width = 8}
-Data_ROI_10 <- rbindlist(DataTable_ROI10, idcol = TRUE) %>%
-  dplyr::select(-X) %>%
-  rename(Sample = .id, FociSize = Area, FociMFI = Mean, FociX = XM, FociY = YM, FociCirc = Circ.) %>%
-  mutate(Sample = gsub("^GRA", "MD??_GRA", Sample)) %>%
-  mutate(Channel = gsub("-.*", "", Label),
-          ROI_pos = gsub(".*:", "", Label),
-          Muscle = gsub("_.*", "", gsub("^[^_]*_", "", Sample)),
-          Muscle = gsub("GAl", "GAL", Muscle),
-          Individual = gsub("_.*", "", Sample),
-          Type = gsub(".*_Neg.*", "Neg", gsub(".*_H.*", "Probes", Sample))) %>%
-  dplyr::select(Sample, Individual, Muscle, Type, ROI_pos, 
-                 Channel, FociSize, FociCirc, FociMFI, FociX, FociY)
-  
-Data_ROI_10$Channel[Data_ROI_10$Channel == "C2"] = "HOXA10"
-Data_ROI_10$Channel[Data_ROI_10$Channel == "C4"] = "HOXC10"
-Data_ROI_10$Channel[Data_ROI_10$Channel == "C5"] = "HOXA11"
-
-Data_ROI_10 <- merge(Data_ROI_size %>% 
-                        filter(ROI == 10) %>% select(-ROI), Data_ROI_10, all = T, sort = F)
-## ROI -10
-NoFoci <- merge(NoMyofiber, Data_ROI_5 %>%
-  group_by(Individual, Muscle, Type, Channel) %>%
-  count(name = "NoFoci") %>%
-  filter(!is.na(Channel)), all = T, by = c("Individual", "Muscle", "Type"))
-
-
-if(TRUE){
-#Foci Size
-P1 <- ggplot(Data_ROI_10, aes_string(x = "FociSize")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("A: Foci Size") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free_y', nrow = 2)
-summary(Data_ROI_10$FociSize)
-
-P2 <- ggplot(Data_ROI_10 %>% filter(FociSize < 6), aes_string(x = "FociSize")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("B: Foci Size < 6um2") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(Type ~ Channel, scales='free_y', nrow = 2)
-summary(Data_ROI_10 %>% filter(FociSize < 6) %>% .$FociSize)
-
-#Foci Circularity
-P3 <- ggplot(Data_ROI_10, aes_string(x = "FociCirc")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("C: Foci Circ") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free_y', nrow = 2)
-summary(Data_ROI_10$FociCirc)
-
-P4 <- ggplot(Data_ROI_10 %>% filter(FociCirc > 0.85), aes_string(x = "FociCirc")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("D: Foci Circ > .08") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(Type ~ Channel, scales='free_y', nrow = 2)
-summary(Data_ROI_10 %>% filter(FociCirc > 0.85) %>% .$FociCirc)
-
-(Tosave <- plot_grid(P1, P2, P3, P4, hjust = 0, vjust = 1, ncol = 2, rel_widths = c(1.2, 3)))
-
-##Foci MFI
-(Tosave <- ggplot(Data_ROI_10, aes_string(x = "FociMFI")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("Foci MFI") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(Type ~ Channel, scales='free_y', nrow = 2))
-(Tosave <- ggplot(Data_ROI_10, aes_string(x = "FociMFI")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("Foci MFI") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(Type ~ Channel, scales='free', nrow = 2))
-
-Data_ROI_10_Filtered <- Data_ROI_10 %>%
-  filter(FociSize < 3.5 & FociCirc > 0.98) 
-Data_ROI_10_Filtered$FociMFI[Data_ROI_10_Filtered$Channel == "HOXC10"] <- ifelse(
-  Data_ROI_10_Filtered$FociMFI[Data_ROI_10_Filtered$Channel == "HOXC10"] < 75, 0, Data_ROI_10_Filtered$FociMFI[Data_ROI_10_Filtered$Channel == "HOXC10"])
-Data_ROI_10_Filtered$FociMFI[Data_ROI_10_Filtered$Channel == "HOXA10"] <- ifelse(
-  Data_ROI_10_Filtered$FociMFI[Data_ROI_10_Filtered$Channel == "HOXA10"] < 300, 0, Data_ROI_10_Filtered$FociMFI[Data_ROI_10_Filtered$Channel == "HOXA10"])
-Data_ROI_10_Filtered <- merge(Data_ROI_10 %>% dplyr::select(Sample:FiberY) %>% unique(), 
-                            Data_ROI_10_Filtered %>%
-                              filter(FociMFI != 0), all = T)
-
-(Data_ROI_10_Filtered %>% filter(!is.na(Channel)) %>% dim())[1] /(Data_ROI_10 %>% filter(!is.na(Channel)) %>% dim())[1]
-
-NoFoci_Filtered <- merge(NoFoci %>% select(-NoFoci), Data_ROI_10_Filtered %>%
-  group_by(Individual, Muscle, Type, Channel) %>%
-  count(name = "NoFoci") %>%
-  filter(!is.na(Channel)), all = T)
-NoFoci_Filtered$NoFoci[is.na(NoFoci_Filtered$NoFoci)] = 0
-
-P1 <- ggplot(Data_ROI_10_Filtered, aes_string(x = "FociCirc")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("Foci Circ") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free', nrow = 3)
-P2 <- ggplot(Data_ROI_10_Filtered, aes_string(x = "FociSize")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("Foci Size") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free', nrow = 3)
-P3 <- ggplot(Data_ROI_10_Filtered, aes_string(x = "FociMFI")) +
-    geom_density(alpha = .5,) +
-    theme_bw() + ggtitle("FociMFI") +
-    theme(legend.position = "none", axis.title = element_blank()) +
-    facet_wrap(. ~ Type, scales='free_y', nrow = 2)
-(Tosave <- plot_grid(P1, P2, P3, hjust = 0, vjust = 1, ncol = 2))
-
-## Average number of foci per myofiber(unfiltered data)
-Data_ROI_10_summary <- Data_ROI_10 %>% 
-  # filter(!is.na(Channel)) %>%
-  group_by(Individual, Muscle, ROI_pos, Type, FiberSize, FiberCirc, Channel) %>%
-  dplyr::summarise(NoFoci = n()) %>%
-  ungroup()
-Data_ROI_10_summary <- pivot_wider(Data_ROI_10_summary, names_from = Channel, values_from = NoFoci) 
-Data_ROI_10_summary$`NA` <- NULL
-Data_ROI_10_summary$HOXA10[is.na(Data_ROI_10_summary$HOXA10)] = 0
-Data_ROI_10_summary$HOXA11[is.na(Data_ROI_10_summary$HOXA11)] = 0
-Data_ROI_10_summary$HOXC10[is.na(Data_ROI_10_summary$HOXC10)] = 0
-Data_ROI_10_summary <- pivot_longer(Data_ROI_10_summary, cols = c(HOXA10, HOXA11, HOXC10), 
-                                  names_to = "Gene", values_to = "NoFoci")
-
-# Association between myofiber size and number of foci
-cor(Data_ROI_10_summary$FiberSize, Data_ROI_10_summary$NoFoci)
-Data_ROI_10_Ave_summary <- merge(NoMyofiber, Data_ROI_10_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup())
-
-# For paper 
-col.muscle <- c("GAL" = "#FF3333", "GRA" = "#66FFFF", "REF" = "#FF66FF", 
-                 "SED" = "#009999", "SEM" = "#33CCCC", "VAL" = "#FF99FF", 
-                 "VAM" = "#FFCCFF")
-
-P1 <- ggplot(Data_ROI_10_Ave_summary,
-        aes(x = Gene, y = Mean, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) + 
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Average number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-
-## Average number of foci per myofiber(filtered data)
-Data_ROI_10_Filtered_summary <- Data_ROI_10_Filtered %>% 
-  group_by(Individual, Muscle, ROI_pos, Type, FiberSize, FiberCirc, Channel) %>%
-  dplyr::summarise(NoFoci = n()) %>%
-  ungroup()
-
-Data_ROI_10_Filtered_summary <- pivot_wider(Data_ROI_10_Filtered_summary, names_from = Channel, values_from = NoFoci) 
-Data_ROI_10_Filtered_summary$`NA` <- NULL
-Data_ROI_10_Filtered_summary$HOXA10[is.na(Data_ROI_10_Filtered_summary$HOXA10)] = 0
-Data_ROI_10_Filtered_summary$HOXA11[is.na(Data_ROI_10_Filtered_summary$HOXA11)] = 0
-Data_ROI_10_Filtered_summary$HOXC10[is.na(Data_ROI_10_Filtered_summary$HOXC10)] = 0
-Data_ROI_10_Filtered_summary <- pivot_longer(Data_ROI_10_Filtered_summary, 
-                                           cols = c(HOXA10, HOXA11, HOXC10), 
-                                  names_to = "Gene", values_to = "NoFoci")
-
-
-# Association between myofiber size and number of foci
-cor(Data_ROI_10_Filtered_summary$FiberSize, Data_ROI_10_Filtered_summary$NoFoci)
-Data_ROI_10_Filtered_Ave_summary <- merge(NoMyofiber, Data_ROI_10_Filtered_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup(), all = T)
-
-P2 <- ggplot(Data_ROI_10_Filtered_Ave_summary,
-        aes(x = Gene, y = Mean, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) +
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Average number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 1, labels = c("Before filtering", "After filtering")))
-
-Data <- new.env(); load("outputs/correctedGenesDatasetToAnalysis.RData", envir = Data)
-v_BatchMus <- Data$v_BatchMus
-SubsetToPlot <- data.frame(HOXA10 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000253293"],
-                            HOXA11 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000005073"],
-                            HOXC10 = v_BatchMus$E[rownames(v_BatchMus) == "ENSG00000180818"],
-                            Muscle = gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(v_BatchMus)),
-                            Individual = gsub("_.*", "", colnames(v_BatchMus)))
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_10_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P1 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Mean, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Average number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_10_Filtered_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P2 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Mean, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Average number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 2, labels = c("Before filtering", "After filtering")))
-
-Data_ROI_10_Filtered_Ave_summary <- Data_ROI_10_Filtered_Ave_summary %>%
-  select(-Median) %>%
-  pivot_wider(names_from = Gene, values_from = Mean) 
-
-comparison <- c()
-for(Gene in c("HOXA10", "HOXA11", "HOXC10")){
-    flm <- as.formula(paste(noquote(Gene), "~ 0 + Muscle +(1|Individual)"))
-    MM <- lmerTest::lmer(flm, weights = NoMyofibers,
-                              data = Data_ROI_10_Filtered_Ave_summary %>% filter(Type == "Probes"))
-    print(Gene)
-    print(anova(MM)["Muscle",]["Pr(>F)"])
-    print(fixef(MM))
-    x <- data.frame(Gene, anova(MM)["Muscle",]["Pr(>F)"], fixef(MM)["MuscleSEM"], fixef(MM)["MuscleGAL"])
-    comparison <- rbind(comparison, x)
-}
-colnames(comparison)[2:4] <- c("Pr(>F)", "Mean_SEM", "Mean_GAL") 
-rownames(comparison) <- NULL
-
-
-##(2) Median number of foci per myofiber(unfiltered data)
-Data_ROI_10_Ave_summary <- merge(NoMyofiber, Data_ROI_10_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup())
-
-P1 <- ggplot(Data_ROI_10_Ave_summary,
-        aes(x = Gene, y = Median, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) + 
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Median number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-
-## Median number of foci per myofiber(filtered data)
-Data_ROI_10_Filtered_Ave_summary <- merge(NoMyofiber, Data_ROI_10_Filtered_summary %>% 
-  group_by(Individual, Muscle, Type, Gene) %>%
-  dplyr::summarise(Mean = mean(NoFoci),
-                    Median = median(NoFoci)) %>%
-  ungroup(), all = T)
-
-P2 <- ggplot(Data_ROI_10_Filtered_Ave_summary,
-        aes(x = Gene, y = Median, fill = Muscle)) + 
-  geom_boxplot(position = position_dodge(0.8)) +
-  stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             geom = "point", size = 3, show.legend = FALSE) +
-  scale_fill_manual(values = col.muscle) +
-  theme_bw() + labs(fill = element_blank(), y = "Median number of foci") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom") +
-         facet_wrap(. ~ Type, nrow = 1)
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 1, labels = c("Before filtering", "After filtering")))
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_10_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P1 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Median, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Median number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-
-ToPlot <- merge(SubsetToPlot %>% 
-                   reshape2::melt(value.name = "NormalizedExpression") %>%
-                   rename(Gene = variable), 
-                 Data_ROI_10_Filtered_Ave_summary %>% 
-                   filter(Type == "Probes"))
-
-P2 <- ggplot(ToPlot, aes(x = NormalizedExpression, y = Median, color = Muscle)) +
-  geom_point(size = 1.5) +
-  scale_color_manual(values = col.muscle) +
-  geom_smooth(method = lm, colour = "black") + stat_cor(method = "pearson") + theme_bw() +
-  labs(y = "Median number of foci", x = "Normalized expression") +
-  theme(panel.grid = element_blank(), 
-         axis.text.x = element_text(size = 10, vjust = 0.5, hjust = 1),
-         axis.ticks = element_blank(), legend.text = element_text( size = 10, vjust = 0.5),
-         strip.text = element_text(size = 11, face = "bold")) +
-  facet_wrap(. ~ Gene, nrow = 3, scales = "free")
-(Tosave <- plot_grid(P1, P2, hjust = 0, vjust = 1, ncol = 2, labels = c("Before filtering", "After filtering")))
-
-Data_ROI_10_Filtered_Median_summary <- Data_ROI_10_Filtered_Ave_summary %>%
-  select(-Mean) %>%
-  pivot_wider(names_from = Gene, values_from = Median) 
-
-comparison <- c()
-for(Gene in c("HOXA10", "HOXA11", "HOXC10")){
-    flm <- as.formula(paste(noquote(Gene), "~ 0 + Muscle +(1|Individual)"))
-    MM <- lmerTest::lmer(flm, weights = NoMyofibers,
-                              data = Data_ROI_10_Filtered_Median_summary %>% filter(Type == "Probes"))
-    print(Gene)
-    print(anova(MM)["Muscle",]["Pr(>F)"])
-    print(fixef(MM))
-    x <- data.frame(Gene, anova(MM)["Muscle",]["Pr(>F)"], fixef(MM)["MuscleSEM"], fixef(MM)["MuscleGAL"])
-    comparison <- rbind(comparison, x)
-}
-colnames(comparison)[2:4] <- c("Pr(>F)", "Mean_SEM", "Mean_GAL") 
-rownames(comparison) <- NULL
-}
 ```
