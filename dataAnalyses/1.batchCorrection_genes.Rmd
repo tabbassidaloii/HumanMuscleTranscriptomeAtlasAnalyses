@@ -13,7 +13,13 @@ editor_options:
 'Note:' The muscle abbreviations were GRA (for Gracilis), SED (semitendinosus distal),  SEM (semitendinosus middle)), GAL (gastrocnemius lateralis), REF (rectus femoris), VAM (vastus medialis) and VAL (vastus lateralis) in all the analyses (scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots (shown in the publication).
 
 ```{r setup, include = FALSE}
+#Empty the R environment
 rm(list = ls())
+
+#Set your working environment to the location where your current source file is saved into.
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+#Check if libraries are already installed, otherwise install them
 if(!"dplyr" %in% installed.packages()) install.packages("dplyr")
 if(!"tibble" %in% installed.packages()) install.packages("tibble")
 if(!"ggplot2" %in% installed.packages()) install.packages("ggplot2")
@@ -29,7 +35,8 @@ if(!"RColorBrewer" %in% installed.packages()) install.packages("RColorBrewer")
 if(!"ggpubr" %in% installed.packages()) install.packages("ggpubr")
 if(!"reshape2" %in% installed.packages()) install.packages("reshape2")
 
-suppressPackageStartupMessages({ 
+#Load installed libraries
+suppressPackageStartupMessages({
   library(dplyr)
   library(ggplot2)
   library(scales)
@@ -42,18 +49,16 @@ suppressPackageStartupMessages({
   library(RColorBrewer)
   library(ggpubr)
 })
-opts_chunk$set(eval = TRUE, echo = TRUE, tidy = TRUE, highlight = TRUE, dev = c('png'), fig.width = 10, fig.height = 8,  fig.path = "figures/")
 
-# RNA isolation protocol for samples isolated with both protocols
+#RNA isolation protocol for samples isolated with both protocols
 withKit <- c("MD06_GRA_Sam25", "MD07_GRA_Sam23", "MD08_GRA_Sam65", 
               "MD10_GRA_Sam106", "MD12_GRA_Sam139")
 withoutKit <- c("MD06_GRA_Sam148", "MD07_GRA_Sam73_RedoSam15", "MD08_GRA_Sam152_RedoSam39", 
                  "MD10_GRA_Sam36", "MD12_GRA_Sam116")
+#Set colors
 col.muscle <- c("GAL" = "#999999", "GRA" = "#0099FF", "REF" = "#FF9999", 
                  "SED" = "#0033FF", "SEM" = "#0066FF", "VAL" = "#FF6666", 
                  "VAM" = "#FF3333")
-
-setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 ```
 
 Comparing the DE results of(A)all batches and(B)only 4 batches, we learned that the including the batch as a covariate in the linear mixed models will not correct for the batch. So we used the ComBat-Seq method to correct for batch.
@@ -66,15 +71,15 @@ In ComBat-Seq, we can specify biological covariates, whose signals will be prese
 - One biological variable: group parameter (we include muscle as a biological covariates to preserve its effect)
 
 ```{r ComBatSeq, echo = FALSE, warning = FALSE, message = FALSE}
-#Loading samples passed the QC step
+#Load the samples passed the QC step
 passedQC <- unlist(read.table("inputs/sampleListPassedQualityControl.txt", as.is = TRUE), use.names = FALSE)
 
-# Reading the count-data
+#Read the count-data
 HTseqCount <- read.csv("inputs/countTables/primarySequencingFragmentsPerGene", sep = "\t")
 reSeqHTseqCount <- read.csv("inputs/countTables/reSequencingFragmentsPerGene", sep = "\t")
 
 HTseqCount <- merge(HTseqCount, reSeqHTseqCount) %>% 
-  filter(grepl("ENSG", feature)) %>% # removing extra rows
+  filter(grepl("ENSG", feature)) %>% #remove extra rows
   dplyr::select(one_of(c("feature", passedQC))) %>% #filtering samples
   filter_at(vars(-feature), any_vars(. !=  0)) %>% #removing genes with zero in all the rows
   tibble::column_to_rownames("feature") %>%
@@ -161,21 +166,21 @@ Using biomart and considering the same ensembl version used for the aligning the
 - Ensembl Archive Release 98(September 2019)
 
 ```{r geneAnnotations, echo = FALSE, warning = FALSE, message = FALSE}
-# Adding gene annotations
+#Add gene annotations
 ensembl <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl", host =  "http://sep2019.archive.ensembl.org/")
 GeneName <- getBM(attributes = c('ensembl_gene_id', 'hgnc_symbol', 'chromosome_name', 'gene_biotype'), mart = ensembl)
 GeneIDs <- GeneName %>% filter(ensembl_gene_id %in% rownames(D_Raw))
 ```
 
 ```{r duplicatedGeneSymbols, echo = FALSE, warning = FALSE}
-# Duplicated gene symbols 
+#Duplicated gene symbols 
 DuplicatedGeneSymbols <- GeneIDs %>% filter(hgnc_symbol !=  "") %>% filter(hgnc_symbol %in% names(table(GeneIDs$hgnc_symbol)[table(GeneIDs$hgnc_symbol)!=  1])) %>% arrange(hgnc_symbol)
 print(kable(DuplicatedGeneSymbols, align = "c"))
 ```
 
 #### Duplicated ensembl gene IDs 
 ```{r duplicatedENSGIDs, echo = FALSE, warning = FALSE}
-# Duplicated Ensembl gene IDs 
+#Duplicated Ensembl gene IDs 
 DuplicatedENSIDs <- GeneIDs %>% filter(ensembl_gene_id %in% names(table(GeneIDs$ensembl_gene_id)[table(GeneIDs$ensembl_gene_id)!=  1]))
 kable(DuplicatedENSIDs, align = "c")
 
@@ -190,10 +195,10 @@ rm (list = setdiff(ls(), c("HTseqCount", "countAdjBatchMus", "D_Raw", "D_BatchMu
 ## Transforming and removing low expressed genes
 ### Raw data
 ```{r transFrilteringPlot1, echo = FALSE, warning = FALSE, fig.height = 6, fig.width = 10,, fig.show = 'hold'}
-# Transformations from the raw-scale
+#Transformations
 cpm <- cpm(D_Raw)
 lcpm <- cpm(D_Raw, log = TRUE)
-# Density plot
+#Density plot
 nsamples <- ncol(D_Raw)
 
 par(mfrow = c(1, 2))
@@ -203,15 +208,15 @@ for(i in 2 : nsamples){
   lines(den$x, den$y, lwd = 2, col = col.muscle[grep(gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(lcpm))[i], names(col.muscle))])
 }
 
-# Removing genes that are lowly expressed
+#Remove genes that are lowly expressed
 keep.exprs <- filterByExpr(D_Raw, group = D_Raw$samples$group, min.count = 10)
 D_Raw <- D_Raw[keep.exprs,, keep.lib.sizes = FALSE]
 
-# Transformations from the raw-scale
+#Transformations
 cpm <- cpm(D_Raw)
 lcpm <- cpm(D_Raw, log = TRUE)
 
-# Density plot
+#Density plot
 nsamples <- ncol(D_Raw)
 plot(density(lcpm[, 1]), ylim = c(0, 0.2), col = col.muscle[grep(gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(lcpm))[1], names(col.muscle))], lwd = 2, las = 2, 
     main = "Filtered Data", xlab = "logCPM")
@@ -223,13 +228,12 @@ for(i in 2 : nsamples){
 
 ### Corrected data for batch while muscle also considered in the model
 ```{r transFrilteringPlot3, echo = FALSE, warning = FALSE, fig.height = 6, fig.width = 10,, fig.show = 'hold'}
-# Transformations from the raw-scale
+#Transformations
 cpm <- cpm(D_BatchMus)
 lcpm <- cpm(D_BatchMus, log = TRUE)
-# Density plot
+#Density plot
 nsamples <- ncol(D_BatchMus)
 
-# plot(density(lcpm), main = "Raw data", xlab = "logCPM")
 par(mfrow = c(1, 2))
 plot(density(lcpm[, 1]), ylim = c(0, 1.35), col = col.muscle[grep(gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(lcpm))[1], names(col.muscle))], lwd = 2, las = 2, 
       main = "Raw Data\nBatch corrected(Muscle)", xlab = "logCPM")
@@ -238,15 +242,15 @@ for(i in 2 : nsamples){
   lines(den$x, den$y, lwd = 2, col = col.muscle[grep(gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(lcpm))[i], names(col.muscle))])
 }
 
-# Removing genes that are lowly expressed
+#Remove low expressed genes
 keep.exprs <- filterByExpr(D_BatchMus, group = D_BatchMus$samples$group, min.count = 10)
 D_BatchMus <- D_BatchMus[keep.exprs,, keep.lib.sizes = FALSE]
 
-# Transformations from the raw-scale
+#Transformations
 cpm <- cpm(D_BatchMus)
 lcpm <- cpm(D_BatchMus, log = TRUE)
 
-# Density plot
+#Density plot
 nsamples <- ncol(D_BatchMus)
 plot(density(lcpm[, 1]), ylim = c(0, 0.2), col = col.muscle[grep(gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(lcpm))[1], names(col.muscle))], lwd = 2, las = 2, 
     main = "Filtered Data", xlab = "logCPM")
@@ -285,7 +289,7 @@ dim(D_BatchMus)[1]
 ```
 
 ```{r colors, echo = FALSE, warning = FALSE, fig.height = 6, fig.width = 10}
-# Colors and labels for plots
+#Set colors and labels
 MusLabPlot <- gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(D_Raw))
 MusColPlot <- col.muscle[match(gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(D_Raw)), 
                                   names(col.muscle))]
@@ -323,11 +327,11 @@ HosColPlot <- col.Hos[match(D_Raw$samples$Hospital[match(colnames(D_Raw),
 
 ## Normalization
 ```{r normalization, echo = FALSE, warning = FALSE, fig.height = 6, fig.width = 10}
-# Normalizing gene expression distributions
+#Normalization of gene expression distributions
 D_Raw <- calcNormFactors(D_Raw, method = "TMM")
 D_BatchMus <- calcNormFactors(D_BatchMus, method = "TMM")
 
-# Transformations from the raw-scale
+#Transformations
 cpm_Raw <- cpm(D_Raw)
 lcpm_Raw <- cpm(D_Raw, log = TRUE)
 cpm_BatchMus <- cpm(D_BatchMus)
@@ -338,7 +342,7 @@ lcpm_BatchMus <- cpm(D_BatchMus, log = TRUE)
 - color = `muscle type`
 
 ```{r boxplot, fig.height = 6, fig.width = 16, echo = FALSE}
-# Check distributions of samples using boxplots
+#Check distributions of samples using boxplots
 par(mfrow = c(1, 1))
 boxplot(lcpm_Raw, xlab = "", ylab = "logCPM", las = 2, main = "Boxplots of logCPM\nnormalised(raw)data", col = col.muscle[match(gsub("MD[0-9][0-9]_|_Sam.*", "", colnames(lcpm_Raw)), names(col.muscle))], names = gsub("_Sam.*", "", colnames(lcpm_Raw)), cex.axis = 0.5); abline(h = median(lcpm_Raw), col = "white", lty = 3)
 
@@ -356,17 +360,17 @@ Normalized and transformed data(logCPM)
 We set center and scale. equal to TRUE in the call to prcomp to standardize the variables prior to the application of PCA(`prcomp(t(lcpm), center = TRUE, scale. = TRUE)`)
  
 ```{r PCA, echo = FALSE, warning = FALSE}
-# Raw
+#Raw
 PC_Raw <-  prcomp(t(lcpm_Raw), center = TRUE, scale. = TRUE)
 PC_sd_Raw <- setNames(PC_Raw$sdev, paste0("PC", 1:length(PC_Raw$sdev)))#The standard deviations of the principal components
 PC_var_expl_Raw <-(PC_sd_Raw^2)/ sum(PC_sd_Raw^2)* 100
 
-# Batch corrected(muscle)
+#Batch corrected(muscle)
 PC_BatchMus <-  prcomp(t(lcpm_BatchMus), center = TRUE, scale. = TRUE)
 PC_sd_BatchMus <- setNames(PC_BatchMus$sdev, paste0("PC", 1:length(PC_BatchMus$sdev)))#The standard deviations of the principal components
 PC_var_expl_BatchMus <-(PC_sd_BatchMus^2)/ sum(PC_sd_BatchMus^2)* 100
 
-# Function to draw PC plots
+#Function to draw PC plots
 plotPCA <- function(PCdata, PC_var_expl, PCx = "PC1", PCy = "PC2", 
                      col = NULL, main = NULL, labels = rownames(PCdata$x)){
   plot(PCdata$x[, PCx], PCdata$x[, PCy], cex = 1, col = col, 
@@ -413,8 +417,7 @@ plotPCA(PC_Raw, PC_var_expl_Raw, PCx = "PC3", PCy = "PC4", col = BatchColPlot, l
 plotPCA(PC_BatchMus, PC_var_expl_BatchMus, col = BatchColPlot, main = "Batch\nBatch corrected(muscle)", labels = BatchLabPlot)
 plotPCA(PC_BatchMus, PC_var_expl_BatchMus, PCx = "PC3", PCy = "PC4", col = BatchColPlot, labels = BatchLabPlot)
 
-# For the paper
-# Abbreviation for the paper
+#Abbreviation for the paper
 muscleAbbreviation <- c("GAL" = "GL", "GRA" = "GR", "VAL" = "VL", "VAM" = "VM", "SED" = "STD", "SEM" = "STM", "REF" = "RF")
 names(col.muscle)<- muscleAbbreviation[match(names(col.muscle), names(muscleAbbreviation))]
 
@@ -426,7 +429,6 @@ names(col.muscle)<- muscleAbbreviation[match(names(col.muscle), names(muscleAbbr
                              Muscle = muscleAbbreviation[match(Muscle, names(muscleAbbreviation))]), 
                              aes(x = PC1, y = PC2, color = Batch, label = Muscle))+ 
   geom_point(size = 1)+
-    # geom_line(aes(group = Muscle))+
   scale_color_manual(values = col.batch)+
   theme_bw()+ 
     labs(fill = element_blank(), 
@@ -445,7 +447,6 @@ names(col.muscle)<- muscleAbbreviation[match(names(col.muscle), names(muscleAbbr
                              Muscle = muscleAbbreviation[match(Muscle, names(muscleAbbreviation))]), 
                              aes(x = PC1, y = PC2, color = Batch, label = Muscle))+ 
   geom_point(size = 1)+
-    # geom_line(aes(group = Muscle))+
   scale_color_manual(values = col.batch)+
   theme_bw()+ 
     labs(fill = element_blank(), 
@@ -468,7 +469,6 @@ ggsave(Tosave2, device = "tiff", units = "cm", width = 10, height = 10, filename
                              Isolation = D_BatchMus$samples$IsolationRNA[match(.id, row.names(D_BatchMus$samples))]), 
                              aes(x = PC1, y = PC2, color = Isolation, label = Individual))+ 
   geom_point(size = 0.7)+
-    # geom_line(aes(group = Muscle))+
   scale_color_manual(values = col.RNA, name = "RNA isolation protocol", labels = c("miRNeasy Mini kit", "RNA precipitation"))+
   theme_bw()+ 
     labs(x = paste0("PC1(", round(PC_var_expl_BatchMus["PC1"]), "%)"), 
@@ -480,7 +480,7 @@ ggsave(Tosave2, device = "tiff", units = "cm", width = 10, height = 10, filename
 
 ggsave(Tosave3, device = "tiff", units = "cm", width = 15, height = 10, filename = "figures/PCA_RNA.tif")
 
-# for the figure below one should run the scripts from the beginning skipping lines 85-86
+#For the figure below one should run the scripts from the beginning skipping lines 85-86
 # (Tosave4 <- ggplot(PC_Raw$x[gsub("_Sam.*", "", rownames(PC_Raw$x)) %in%  gsub("_Sam.*", "", withKit), 1:4] %>% as.data.frame() %>%
 #                    tibble::rownames_to_column(".id") %>%
 #                      mutate(Individual = gsub("_.*", "", .id)) %>%
@@ -488,7 +488,6 @@ ggsave(Tosave3, device = "tiff", units = "cm", width = 15, height = 10, filename
 #                      mutate(Isolation = D_Raw$samples$IsolationRNA[match(.id, row.names(D_Raw$samples))]), 
 #                              aes(x = PC1, y = PC2, color = Isolation, label = Individual))+ 
 #   geom_point(size = 1)+
-#     # geom_line(aes(group = Muscle))+
 #   scale_color_manual(values = col.RNA, name = "RNA isolation protocol", labels = c("miRNeasy Mini kit", "RNA precipitation"))+
 #   theme_bw()+ 
 #         labs(x = paste0("PC1(32%)"), 
@@ -506,42 +505,42 @@ The contribution of each sample and gene in each PC is estimated.
 The calculation step is explained by details within codes.
 The gene contribution restult is not yet been used but the smaple contribution is used to show the association of different factors and PCs. To investigate the significance of association the Kruskal-Wallis test and Pearson correlation test are used for the categorical and numeric factors, respectively.
 ```{r PCAssociation, echo = FALSE, warning = FALSE, fig.height = 6, fig.width = 10}
-# PCA results for genes(variables)
-# Compute Coordinates
-# The matrix of variable loadings(columns are eigenvectors)
+#PCA results for genes(variables)
+#Compute Coordinates
+#The matrix of variable loadings(columns are eigenvectors)
 for(file in c("Raw", "BatchMus")){
   PC <- get(paste0("PC_", file))
-  loadings <- PC$rotation # Loading of the genes in the PCs(g x n)
-  sdev <- PC$sdev # Standard deviation for PCs(n)
+  loadings <- PC$rotation #Load of the genes in the PCs(g x n)
+  sdev <- PC$sdev #Standard deviation for PCs(n)
   var_coord_func <- function(loadings, comp.sdev){loadings * comp.sdev}
   var.coord <- t(apply(loadings, 1, var_coord_func, sdev))#(g x n)
-  # Compute Cos2
+  #Compute Cos2
   var.cos2 <- var.coord ^ 2 #(g x n)
-  # Compute contributions
-  comp.cos2 <- apply(var.cos2, 2, sum)# Sum of the variance per PC
+  #Compute contributions
+  comp.cos2 <- apply(var.cos2, 2, sum) #Sum of the variance per PC
   contrib <- function(var.cos2, comp.cos2){var.cos2 * 100 / comp.cos2}
-  var.contrib <- t(apply(var.cos2, 1, contrib, comp.cos2))# %involvement of genes in variance of each PC
-  # PCA results for the samples
-  # Coordinates of samples
+  var.contrib <- t(apply(var.cos2, 1, contrib, comp.cos2)) #%involvement of genes in variance of each PC
+  #PCA results for the samples
+  #Coordinates of samples
   Sam.coord <- PC$x
-  # Cos2 of samples
-  # 1. square of the distance between an sample and the PCA center of gravity
+  #Cos2 of samples
+  #1. square of the distance between an sample and the PCA center of gravity
   center <- PC$center #(g)the variable means(means that were substracted)
   scale <- PC$scale #(g)the variable standard deviations(the scaling applied to each variable)
   getdistance <- function(Sam_row, center, scale){return(sum(((Sam_row-center)/scale)^2))}
   lcpm <- get(paste0("lcpm_", file))
   d2 <- apply(t(lcpm), 1, getdistance, center, scale)
-  # 2. Compute the cos2. The sum of each row is 1
+  #2. Compute the cos2. The sum of each row is 1
   cos2 <- function(Sam.coord, d2){return(Sam.coord^2/d2)}
   Sam.cos2 <- apply(Sam.coord, 2, cos2, d2)
-  # Contributions of samples
+  #Contributions of samples
   contrib <- function(Sam.coord, comp.sdev, n.Sam){100 *(1/n.Sam)* Sam.coord^2/comp.sdev^2}
   Sam.contrib <- t(apply(Sam.coord, 1, contrib, PC$sdev, nrow(Sam.coord)))
-  # Adding the sample information to the Sample contribution in the first 10 PCs
+  #Add the sample information to the Sample contribution in the first 10 PCs
   D <- get(paste0("D_", file))
   Sam.contrib <- merge(Sam.contrib[, 1:10], D$samples, by =  "row.names")
 
-  # Pearson correlation and Kruskall-Wallis tests
+  #Pearson correlation and Kruskall-Wallis tests
   GroupAsso <- matrix(data = NA, nrow = 10, ncol = 10)
   colnames(GroupAsso)<- c(colnames(Sam.contrib)[c(12, 16, 23, 20, 19, 21, 22, 18, 17, 13)])
   rownames(GroupAsso)<- colnames(Sam.contrib)[grepl("PC", colnames(Sam.contrib))]
@@ -552,7 +551,7 @@ for(file in c("Raw", "BatchMus")){
       pval <- unlist(kruskal.test(fml, data = Sam.contrib)["p.value"])
       GroupAsso[pc, fac]<- round(pval, digits = 3)
     }
-    for(fac in colnames(Sam.contrib)[c(13, 21:23)]){ # Numeric factors
+    for(fac in colnames(Sam.contrib)[c(13, 21:23)]){ #Numeric factors
       pval <- unlist(cor.test(Sam.contrib[, pc], Sam.contrib[, fac])["p.value"])
       GroupAsso[pc, fac]<- round(pval, digits = 3)
     }
@@ -590,7 +589,7 @@ for(Asso in ls(pattern = "GroupAsso_")){
 ### 2. Hierarchical clustering with heatmaps
 Top 1000 most variable genes across all samples are used to draw a heatmap.
 ```{r hierarchicalHeatmapPlot, echo = FALSE, warning = FALSE, message = FALSE, fig.height = 10, fig.width = 14}
-# Set the colors
+#Set colors
 mypalette <- brewer.pal(11, "RdYlBu")
 morecols <- colorRampPalette(mypalette)
 
@@ -599,11 +598,11 @@ colnames(myCols)<- c("Batch", "Muscle", "Individual")
 
 for(file in c("Raw", "BatchMus")){
   lcpm <- get(paste0("lcpm_", file))
-  # We estimate the variance for each gene(row)in the logCPM matrix
+  #We estimate the variance for each gene(row)in the logCPM matrix
   countVar <- apply(lcpm, 1, var)
-  # Get the row numbers for the top 1000 most variable genes
+  #Get the row numbers for the top 1000 most variable genes
   highVar <- order(countVar, decreasing = TRUE)[1:1000]
-  # Subset logCPM matrix
+  #Subset logCPM matrix
   hmDat <- lcpm[highVar, ]
   # Plot the heatmap
   library(heatmap3)
@@ -613,7 +612,6 @@ for(file in c("Raw", "BatchMus")){
                    labRow = FALSE, scale = "row", 
                    col = rev(morecols(52)), breaks=seq(-5, 8, 0.25), margins = c(5, 1), 
             Rowv = T, showRowDendro = F)
-  
 }
 save(D_BatchMus, countAdjBatchMus, file =  "outputs/correctedGenesDatasetToAnalysis.RData")
 rm (list = setdiff(ls(), c("D_Raw", "D_BatchMus")))
@@ -633,12 +631,12 @@ Normalized and transformed data: the mean-variance trend is removed(voom(limma)o
 Linear model is fitted for each gene considering muscle type, individual, isolation protocol, RIN score, concentration, library batch, sequencing lane, and library size as fixed effects.
 
 ```{r analysisOfVariance, echo = FALSE, warning = FALSE}
-# Creating a design matrix
+#Create a design matrix
 design <- model.matrix(~0 + group + individual + 
                           batch, data = D_Raw$samples)
 colnames(design)<- gsub("group|individual", "", colnames(design))
 
-# mean-variance trend was removed using the voom
+#Mean-variance trend was removed using the voom
 for(Dfile in ls(pattern = "D_")){
   D <- get(Dfile)
   v <- voom(D, design)
@@ -647,9 +645,9 @@ for(Dfile in ls(pattern = "D_")){
                          "Concentration", "Library batch", "Library size", 
                          "Residuals")
   rownames(VarPart)<- rownames(v$E)
-  # Scaling the numeric factors
+  #Scale the numeric factors
   v$targets[, c(2, 10, 11)]<- scale(v$targets[, c(2, 10, 11)], center = T, scale = T)
-  # fit linear model for each gene(including all factors as fixed effects)
+  #Fit linear model for each gene(including all factors as fixed effects)
   for(gene in 1:nrow(v$E)){
     AnovaData <- cbind(v$E[gene, ], v$weights[gene, ], v$targets)
     colnames(AnovaData)[1:2]<- c("value", "weights")
@@ -677,8 +675,6 @@ for(VarPartfile in ls(pattern = "^VarPart_")){
   print(Tosave <- ggboxplot(VarPartPlot, x = "Var2", y = "value", 
                     add.params = list(fill = "white"), outlier.shape = NA)+
            labs(x = element_blank(), y = "%Variance explained")+
-           # ggtitle(paste0("Variation sources in muscle expression dataset\n", 
-           #                  gsub("VarPart_", "", VarPartfile)))+
            theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 12), 
                   axis.text.y = element_text(size = 12), axis.title =  element_text(size = 12), 
                   legend.position = "none")+ ylim(0, 100)+
@@ -695,6 +691,7 @@ This plot shows that the biological factors have a high contribution in the vari
 The individual factor shows the highest contribution. However, we should remember that other hidden technical factors could be also involved in the variation accounted for individual(the operation time/day, the differences in how fast samples were snap-freezed after the operation, ...).
 The library preparation batch is the most important technical source of variation in the not corrected data but as expected its effect has been eliminated by batch effect correction.
 
-```{r}
+### Print session info
+```{r, warning = FALSE, message = FALSE}
 sessionInfo()
 ```

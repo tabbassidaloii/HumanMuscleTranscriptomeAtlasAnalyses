@@ -13,7 +13,13 @@ editor_options:
 'Note:' The muscle abbreviations were GRA (for Gracilis), SED (semitendinosus distal),  SEM (semitendinosus middle)), GAL (gastrocnemius lateralis), REF (rectus femoris), VAM (vastus medialis) and VAL (vastus lateralis) in all the analyses (scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots (shown in the publication).
 
 ```{r setup, include = FALSE}
+#Empty the R environment
 rm(list = ls())
+
+#Set your working environment to the location where your current source file is saved into.
+setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+
+#Check if libraries are already installed, otherwise install them
 if(!require("BiocManager", quietly = TRUE)) install.packages("BiocManager")
 if(!"IsoformSwitchAnalyzeR" %in% installed.packages()) BiocManager::install("IsoformSwitchAnalyzeR")
 if(!"BSgenome.Hsapiens.UCSC.hg38" %in% installed.packages()) BiocManager::install("BSgenome.Hsapiens.UCSC.hg38")
@@ -21,6 +27,7 @@ if(!"biomaRt" %in% installed.packages())BiocManager::install("biomaRt")
 if(!"dplyr" %in% installed.packages()) install.packages("dplyr")
 if(!"ggplot2" %in% installed.packages())install.packages("ggplot2")
 
+#Load installed libraries
 suppressPackageStartupMessages({
   library(IsoformSwitchAnalyzeR)
   library(biomaRt)
@@ -28,10 +35,9 @@ suppressPackageStartupMessages({
   library(BSgenome.Hsapiens.UCSC.hg38)
   library(ggplot2)
 })
-setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 ```
 
-### transcript usage differences 
+### Transcript usage differences 
 ```{r transcriptUsageAnalysis, echo = FALSE, warning = FALSE, message = FALSE}
 Quant <- importIsoformExpression( #providing a directory with Stringtie ctab files
   parentDir = "input/Stringtie/",
@@ -39,16 +45,16 @@ Quant <- importIsoformExpression( #providing a directory with Stringtie ctab fil
   readLength = 150
 )
 
-### Organising gene/transcripts annotations
+#Organize gene/transcripts annotations
 ensembl <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl", host = "http://sep2019.archive.ensembl.org/")
-transcriptIDs <- getBM(attributes = c('ensembl_gene_id', 'ensembl_transcript_id', 'transcript_length', 'chromosome_name', 'gene_biotype'), mart = ensembl) %>%  # nolint
+transcriptIDs <- getBM(attributes = c('ensembl_gene_id', 'ensembl_transcript_id', 'transcript_length', 'chromosome_name', 'gene_biotype'), mart = ensembl) %>%
   filter(ensembl_transcript_id %in% Quant$counts$isoform_id) %>%
   arrange(ensembl_transcript_id) 
 
 if(all(Quant$counts$isoform_id == transcriptIDs$ensembl_transcript_id))
   tpm <- cbind(transcriptIDs, tpm[-1])
 
-### Transcript IDs of genes that were present in the filtered gene dataset
+#Transcript IDs of genes that were present in the filtered gene dataset
 geneData <- new.env()
 load("outputs/correctedTranscriptsDatasetToAnalysis.RData", envir = geneData)
 transcriptIDsFilt <- transcriptIDs %>% filter(ensembl_gene_id %in% geneData$D_BatchMus$genes$ensembl_gene_id)
@@ -67,20 +73,19 @@ myDesign <- data.frame(
                                       paste0 ("Sam", 118:156), 
                                     "4", "5"))))))
 
-### Create switchAnalyzeRlist
+#Create switchAnalyzeRlist
 aSwitchList <- importRdata(
   isoformCountMatrix   = Quant$counts,
   isoformRepExpression = Quant$abundance,
   designMatrix         = myDesign,
   isoformExonAnnoation = "Homo_sapiens.GRCh38.98.gtf",
   isoformNtFasta = "gencode.v32.transcriptsNoVersion.fa",
-  # fixStringTieAnnotationProblem = TRUE,
   ignoreAfterPeriod = T, 
   removeNonConvensionalChr = T,
   showProgress = FALSE
 )
 
-### Subset transcripts of genes that were present in the filtered gene dataset
+#Subset transcripts of genes that were present in the filtered gene dataset
 aSwitchList <- subsetSwitchAnalyzeRlist(
   switchAnalyzeRlist = aSwitchList,
   subset = aSwitchList$isoformFeatures$isoform_id %in% transcriptIDsFilt$ensembl_transcript_id
@@ -138,7 +143,6 @@ sigGenes <- combined$isoformSwitchAnalysis %>%
   mutate(gene_id = combined$isoformFeatures$gene_id[match(gene_ref, combined$isoformFeatures$gene_ref)]) %>%
   filter(gene_id %in% sigGenes)
 
-# for the paper
 muscleAbbreviation <- c("GAL" = "GL", "GRA" = "GR", "VAL" = "VL", "VAM" = "VM", "SED" = "STD", "SEM" = "STM", "REF" = "RF")
 allGenes <- combined$isoformSwitchAnalysis %>%
   mutate(gene_id = combined$isoformFeatures$gene_id[match(gene_ref, combined$isoformFeatures$gene_ref)])
@@ -179,11 +183,10 @@ toPlot <- sigGenes %>%
 ggsave(toSave, device = "tiff", units = "cm", width = 15, height = 22,
        filename = "figures/isoformSwitches.tif")
 
-## removing transcripts originated from cell type related genes 
+#RemovE transcripts originated from cell type related genes
 geneData <- new.env()
 load("outputs/cellTypeComposition/geneCellTypesEigengeneCor.RData", envir = geneData)
 load("outputs/correctedGenesDatasetToAnalysis.RData", envir = geneData)
-
 
 geneCellTypeRelated <- geneData$D_BatchMus$genes$hgnc_symbol[geneData$D_BatchMus$genes$ensembl_gene_id %in% unique(unlist(geneData$SigGenesCellTypes, use.names = F))]
 geneCellTypeRelated <- unique(toPlot$gene_id) [unique(toPlot$gene_id) %in% geneCellTypeRelated]
@@ -191,8 +194,8 @@ geneCellTypeRelated <- unique(toPlot$gene_id) [unique(toPlot$gene_id) %in% geneC
 col.muscle <- c("GL" = "#999999", "GR" = "#0099FF", "RF" = "#FF9999", 
                 "STD" = "#0033FF", "STM" = "#0066FF", "VL" = "#FF6666", 
                 "VM" = "#FF3333")
-MusDissSim_BatchMus <- matrix(0, nrow = 7, ncol = 7) 
-colnames(MusDissSim_BatchMus) <- rownames(MusDissSim_BatchMus) <- names(col.muscle) 
+MusDissSim_BatchMus <- matrix(0, nrow = 7, ncol = 7)
+colnames(MusDissSim_BatchMus) <- rownames(MusDissSim_BatchMus) <- names(col.muscle)
 for(c in unique(toPlot$comparison)){
   MusDissSim_BatchMus [gsub(".* vs ", "", c), gsub(" vs .*", "", c)] <- 
     MusDissSim_BatchMus [gsub(" vs .*", "", c), gsub(".* vs ", "", c)] <- 
@@ -229,3 +232,7 @@ ggsave(Tosave, device = "tiff", units = "cm", width = 8, height = 7,
        filename = "figures/Transcript_isoformSwitches_muscles.tif")
 ```
 
+### Print session info
+```{r, warning = FALSE, message = FALSE}
+sessionInfo()
+```

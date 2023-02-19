@@ -13,10 +13,13 @@ editor_options:
 'Note:' The muscle abbreviations were GRA(for Gracilis), SED(semitendinosus distal),  SEM(semitendinosus middle)), GAL(gastrocnemius lateralis), REF(rectus femoris), VAM(vastus medialis) and VAL(vastus lateralis) in all the analyses(scripts) and they were only changed to GR, STM, STD, GL, RF, VM and VL for the plots(shown in the publication).
 
 ```{r setup, include = FALSE}
+#Empty the R environment
 rm(list = ls())
 
+#Set your working environment to the location where your current source file is saved into.
 setwd(dirname(rstudioapi::getSourceEditorContext()$path))
 
+#Check if libraries are already installed, otherwise install them
 if(!"dplyr" %in% installed.packages()) install.packages("dplyr")
 if(!"data.table" %in% installed.packages()) install.packages("data.table")
 if(!"ggplot2" %in% installed.packages()) install.packages("ggplot2")
@@ -27,6 +30,7 @@ if(!"knitr" %in% installed.packages()) install.packages("knitr")
 if(!"reshape2" %in% installed.packages()) install.packages("reshape2")
 if(!"ggpubr" %in% installed.packages()) install.packages("ggpubr")
 
+#Load installed libraries
 suppressPackageStartupMessages({
   library(dplyr)
   library(data.table)
@@ -38,14 +42,11 @@ suppressPackageStartupMessages({
   library(ggpubr)
   })
 
-knit_hooks$set(webgl = hook_webgl)
-set.seed(1)
-
-# Read all the txt files:
+#Read all the txt files:
 InputPath = "input/RNAscope/AnalysisParticles/"
 Files <- list.files(path = InputPath, pattern = ".txt", full.names = T, recursive = T)
 
-# Remove image with no signal(MD19)
+#Remove image with no signal(MD19)
 Files <- Files[-grep("MD19_GAL_H5_2Tiles_AnalyzeParticles", Files)]
 
 DataTable_whole <- lapply(Files[grep("AnalyzeParticles.txt", Files)], read.csv, sep = "\t")
@@ -63,7 +64,7 @@ Data_ROI_size <- rbindlist(MyofiberSize, idcol = TRUE) %>%
   rename(Sample = .id, FiberSize = Area, FiberX = XM, FiberY = YM, FiberCirc = Circ.) %>%
   mutate(ROI_pos = gsub(".*:", "", Label),
           Muscle = gsub("_.*", "", gsub("^[^_]*_", "", Sample)),
-          Muscle = gsub("GAl", "GAL", Muscle), # correcting a typo in the files
+          Muscle = gsub("GAl", "GAL", Muscle), #Correct a typo in the files
           Individual = gsub("_.*", "", Sample),
           Type = gsub(".*_Neg.*", "Neg", gsub(".*_H.*", "Probes", Sample))) %>%
   dplyr::select(Sample, Individual, Muscle, Type, ROI_pos,
@@ -97,7 +98,7 @@ NoFoci <- merge(NoMyofiber, Data_ROI %>%
   count(name = "NoFoci") %>%
   filter(!is.na(Channel)), all = T, by = c("Individual", "Muscle", "Type"))
 
-## Whole ROI
+#Whole ROI
 #Foci Size
 P1 <- ggplot(Data_ROI, aes_string(x = "FociSize")) +
     geom_density(alpha = .5,) +
@@ -161,9 +162,8 @@ P3 <- ggplot(Data_ROI_Filtered, aes_string(x = "FociMFI")) +
     facet_wrap(. ~ Type, scales='free_y', nrow = 2)
 (Tosave <- plot_grid(P1, P2, P3, hjust = 0, vjust = 1, ncol = 3))
 
-## Average number of foci per myofiber(unfiltered data)
+#Average number of foci per myofiber(unfiltered data)
 Data_ROI_summary <- Data_ROI %>% 
-  # filter(!is.na(Channel)) %>%
   group_by(Individual, Muscle, ROI_pos, Type, FiberSize, FiberCirc, Channel) %>%
   dplyr::summarise(NoFoci = n()) %>%
   ungroup()
@@ -175,7 +175,7 @@ Data_ROI_summary$HOXC10[is.na(Data_ROI_summary$HOXC10)] = 0
 Data_ROI_summary <- pivot_longer(Data_ROI_summary, cols = c(HOXA10, HOXA11, HOXC10), 
                                   names_to = "Gene", values_to = "NoFoci")
 
-# Association between myofiber size and number of foci
+#Association between myofiber size and number of foci
 cor(Data_ROI_summary$FiberSize, Data_ROI_summary$NoFoci)
 Data_ROI_Ave_summary <- merge(NoMyofiber, Data_ROI_summary %>% 
   group_by(Individual, Muscle, Type, Gene) %>%
@@ -183,8 +183,7 @@ Data_ROI_Ave_summary <- merge(NoMyofiber, Data_ROI_summary %>%
                     Median = median(NoFoci)) %>%
   ungroup())
 
-# For paper
-col.muscle <- c("GL" = "#999999", "STM" = "#0066FF") # Abbreviations based on the paper
+col.muscle <- c("GL" = "#999999", "STM" = "#0066FF") #Abbreviations based on the paper
 
 (P1 <- ggplot(Data_ROI_Ave_summary %>%
                 mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")),
@@ -198,7 +197,7 @@ col.muscle <- c("GL" = "#999999", "STM" = "#0066FF") # Abbreviations based on th
          axis.title.x = element_blank(), legend.position = "bottom") +
          facet_wrap(. ~ Type, nrow = 1))
 
-## Average number of foci per myofiber(filtered data)
+#Average number of foci per myofiber(filtered data)
 Data_ROI_Filtered_summary <- Data_ROI_Filtered %>% 
   group_by(Individual, Muscle, ROI_pos, Type, FiberSize, FiberCirc, Channel) %>%
   dplyr::summarise(NoFoci = n()) %>%
@@ -226,21 +225,16 @@ Data_ROI_Filtered_summary <- pivot_longer(Data_ROI_Filtered_summary,
 (Tosave <- ggplot(Data_ROI_Filtered_summary,
         aes(x = Individual, y = NoFoci, fill = Gene)) + 
   geom_boxplot(position = position_dodge(0.8)) +
-  # stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             # geom = "point", size = 3, show.legend = FALSE) +
-  # scale_fill_manual(values = col.muscle) +
   theme_bw() + labs(fill = element_blank(), y = "Number of foci per myofiber") +
-  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
-         axis.title.x = element_blank(), legend.position = "bottom",
-         axis.text.x.bottom = element_text(angle = 90, vjust = 0.5)) +
-         facet_grid(Muscle ~ Type, scales = "free", space = "free"))
+  theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12),
+        axis.title.x = element_blank(), legend.position = "bottom",
+        axis.text.x.bottom = element_text(angle = 90, vjust = 0.5)) +
+        facet_grid(Muscle ~ Type, scales = "free", space = "free"))
 
 (Tosave <- ggplot(Data_ROI_Filtered_summary%>%
                 mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")),
         aes(x = Individual, y = NoFoci, fill = Muscle)) + 
   geom_boxplot(position = position_dodge(0.8)) +
-  # stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             # geom = "point", size = 3, show.legend = FALSE) +
   scale_fill_manual(values = col.muscle) +
   theme_bw() + labs(fill = element_blank(), y = "Number of foci per myofiber") +
   theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
@@ -254,8 +248,6 @@ Data_ROI_Filtered_summary <- pivot_longer(Data_ROI_Filtered_summary,
                 mutate(Muscle = ifelse(Muscle == "GAL", "GL", "STM")),
         aes(x = Individual, y = NoFoci, fill = Muscle)) + 
   geom_boxplot(position = position_dodge(0.8)) +
-  # stat_summary(fun.y = mean, color = "darkred", position = position_dodge(0.75),
-             # geom = "point", size = 3, show.legend = FALSE) +
   scale_fill_manual(values = col.muscle) +
   theme_bw() + labs(fill = element_blank(), y = "Number of foci per myofiber") +
   theme(panel.grid = element_blank(), axis.text.x = element_text(size = 12), 
@@ -263,7 +255,7 @@ Data_ROI_Filtered_summary <- pivot_longer(Data_ROI_Filtered_summary,
          axis.text.x.bottom = element_text(angle = 90, vjust = 0.5)) +
          facet_grid(Gene ~ Type, scales = "free", space = "free"))
 
-# Association between myofiber size and number of foci
+#Association between myofiber size and number of foci
 cor(Data_ROI_Filtered_summary$FiberSize, Data_ROI_Filtered_summary$NoFoci)
 Data_ROI_Filtered_Ave_summary <- merge(NoMyofiber, Data_ROI_Filtered_summary %>% 
   group_by(Individual, Muscle, Type, Gene) %>%
@@ -358,7 +350,6 @@ ToPlot <- merge(SubsetToPlot %>%
   labs(y = "Average number of foci", x = "Normalized expression", color = "") +
   theme(panel.grid = element_blank(),axis.title =  element_text(size = 14),
          axis.text.x = element_text(size = 12, vjust = 0.5),
-         # axis.ticks = element_blank(),
          legend.text = element_text( size = 12, vjust = 0.5),
          strip.text = element_text(size = 12, face = "bold")) +
   facet_wrap(. ~ Gene, nrow = 3, scales = "free"))
@@ -422,5 +413,9 @@ rownames(comparison) <- NULL
 #     Gene       Pr(>F) Mean_SEM Mean_GAL
 # 1 HOXA10 2.582160e-07 5.661107  4.54487
 # 2 HOXC10 1.310777e-07 4.565500  3.42333
+```
 
+### Print session info
+```{r, warning = FALSE, message = FALSE}
+sessionInfo()
 ```
