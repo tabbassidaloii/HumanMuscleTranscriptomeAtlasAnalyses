@@ -7,4 +7,4 @@ Tooba Abbassi-Daloii, Salma el Abdellaoui, Lenard M Voortman, Thom TJ Veeger, Da
 https://doi.org/10.7554/eLife.80500
 
 
-The processed datasets generated during the analyses are not publicly available but could be made available upon request.
+To download the processed datasets generated during the analyses please click [here](https://github.com/tabbassidaloii/HumanMuscleTranscriptomeAtlasAnalyses/blob/main/dataAnalyses/processedData/normalizedExpressionData.RData).
