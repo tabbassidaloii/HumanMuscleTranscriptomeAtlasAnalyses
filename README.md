@@ -7,4 +7,5 @@ Tooba Abbassi-Daloii, Salma el Abdellaoui, Lenard M Voortman, Thom TJ Veeger, Da
 https://doi.org/10.7554/eLife.80500
 
 
-To download the processed datasets generated during the analyses please click [here](https://github.com/tabbassidaloii/HumanMuscleTranscriptomeAtlasAnalyses/blob/main/dataAnalyses/processedData/normalizedExpressionData.RData).
+- To download the processed **gene** expression dataset, please click [here](https://github.com/tabbassidaloii/HumanMuscleTranscriptomeAtlasAnalyses/blob/main/dataAnalyses/processedData/normalizedGeneExpressionDataset.RData).
+- To download the processed **transcript** expression dataset, please click [here](https://github.com/tabbassidaloii/HumanMuscleTranscriptomeAtlasAnalyses/blob/main/dataAnalyses/processedData/normalizedTranscriptExpressionDataset.RData)
