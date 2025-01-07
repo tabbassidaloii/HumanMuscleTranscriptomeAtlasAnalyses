@@ -9,3 +9,6 @@ https://doi.org/10.7554/eLife.80500
 
 - To download the processed **gene** expression dataset, please click [here](https://github.com/tabbassidaloii/HumanMuscleTranscriptomeAtlasAnalyses/blob/main/dataAnalyses/processedData/normalizedGeneExpressionDataset.RData).
 - To download the processed **transcript** expression dataset, please click [here](https://github.com/tabbassidaloii/HumanMuscleTranscriptomeAtlasAnalyses/blob/main/dataAnalyses/processedData/normalizedTranscriptExpressionDataset.RData)
+
+
+**Note**: The raw data (FASTQ) are stored in the European Genome Archive (EGA, ID EGAS00001005904), and applications for access must be made via the DAC and the EGA portal.
